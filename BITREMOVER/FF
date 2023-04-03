@@ -1,0 +1,825 @@
+
+*           Title: XGITS
+*          Author: John A. Johnson
+*            Date: 26 February 1989
+*     Description: types multiple files
+*
+; 4.02.2023 Modified for Github output
+;           The ctl-c handler is not enabled; exiting doesn't close files
+;
+WS     EQU  >F000        my workspace
+UTILWS EQU  WS+32        another ws for routines
+WORK   EQU  >F000-258    just a buffer for parsing etc
+CR     EQU  13           a carrage return
+LF     EQU  10           a linefeed
+;;     DXOP CALL,0       define CALL as meaning XOP 0
+*
+       LWPI WS           use a fast workspace
+       LI   R0,1         get memory pages
+       LI   R1,7         i need a new computer to store directory names
+       LI   R2,1         local page 1
+       SETO R3           if you got it, flaunt it
+       XOP  @MEM,0       request the ram from mdos
+       ABS  R0           check for errors
+       JEQ  GOTMEM       if none
+       BL   @TTYOUT      else paint message
+       DATA NOMEM,0      'not enough memory'
+       B    @NOPRN3      then exit to mdos
+*
+GOTMEM LI   R0,4         get address map
+       LI   R1,MAP       execution address of map
+       LI   R2,10        map is 10 bytes big
+       XOP  @MEM,0       get the info from mdos
+       LI   R1,MAP+1          now bank in the new ram pages
+       MOVB *R1+,@>F111       new ram for >2000 - >3FFF
+       MOV  *R1+,@>F112       new ram for >4000 - >7FFF
+       MOV  *R1+,@>F114       new ram for >8000 - >BFFF
+       MOV  *R1+,@>F116       new ram for >C000 - >FFFF
+*
+;;     CLR  @PRINT       not printing yet
+;;     CLR  @PLINES      no lines to print
+;;     CLR  @MORE        not pausing yet
+
+       CLR  @SINGLE      default is all directories
+       CLR  @CONFRM      no confirmation
+;;;    SB   @TYPES,@TYPES     clear types   ;now forced to 2
+
+       SB   @TYPE,@TYPE       and type
+       LI   R0,>2800          40 bytes for WORK length
+       LI   R1,WORK-1         patch it
+       MOVB R0,*R1+           crunch command line and move it to WORK
+       MOV  @>0128,R2         get command line argument address
+       JEQ  NOGOT             if no arguments
+       CB   @2(R2),@-1(R1)    see if command line is too long
+       JHE  NOGOT             if too long
+       MOV  R1,R5             else save address of WORK to R5
+       DEC  R5                to length pointer
+       MOVB @2(R2),R6         argument length
+       SRL  R6,8              make it a word
+       INCT R6                add two
+NXTNOD MOV  R2,R3             save command address
+       INCT R3                add 2
+       MOV  R2,R4
+       AI   R4,8
+GETNOD MOVB *R3+,*R5+         start moving the data
+       DEC  R6                till count is done
+       JEQ  GOTCMD
+       C    R3,R4             r3 holds node count
+       JL   GETNOD            if done this node, go get some more
+       MOV  *R2,R2            get next node
+       JMP  NXTNOD
+*
+GOTCMD MOVB @WORK-1,R1   length of argument
+       JEQ  NOGOT        if no arg
+       SRL  R1,8         else make it a word
+       INC  R1           and add 1 for the loop conter
+       LI   R2,50        largest argument possible
+       LI   R4,WORK      address of command line text
+*
+* lets look for a slash
+*
+NOQ    MOV  R4,R5        save buffer start address
+       MOV  R1,R6        save arg length
+       CLR  R7           flag for passes
+       LI   R11,5        5 possible switches, p s, m, c, or ?
+FINDSL MOV  R5,@NOPMS+2  save the slash address
+       CB   *R5+,@SLASH  look for a slash
+       JEQ  GOTSL        if we have one
+       DEC  R6           else decrement total arg count
+       JNE  FINDSL       and if we're not done, look some more
+       JMP  GETFIL       if we are done, blow this routine off
+
+
+GOTSL  NOP
+
+;;GOTSL  CB   *R5,@C       a C?  ;CONFIRM; maybe use this as overwrite confirm
+;      JEQ  YESC
+;      CB   *R5,@LILC    lil c?
+;      JEQ  YESC
+
+;      CB   *R5,@P       we found a /, now look for a 'P'
+;      JEQ  YESP
+;      CB   *R5,@LILP    a little p?
+;      JEQ  YESP
+;      CB   *R5,@M       more?
+;      JEQ  YESM
+;      CB   *R5,@LILM
+;      JEQ  YESM
+
+       CB   *R5,@S       s?
+       JEQ  YESS
+       CB   *R5,@LILS
+       JEQ  YESS
+       CB   *R5,@QMARK
+       JNE  NOPMS
+       BL   @TTYOUT
+       DATA HELP,0
+       B    @NOPRN3
+
+;YESM   LI   R12,21
+;      MOV  R12,@MORE
+;      JMP  SWAGN
+;YESP   SETO @PRINT
+;      JMP  SWAGN
+;
+;;YESC   SETO @CONFRM
+;;     JMP  SWAGN
+
+YESS   SETO @SINGLE
+SWAGN  INC  R5           over the found arg
+       DEC  R11          arg counter
+       JNE  GOTSL
+*
+NOPMS  LI   R5,0         back to the /
+       MOVB @H32,*R5     and patch over it with a space
+*
+GETFIL CB   *R4+,@H32    look for a space in the command line (filename)
+       JLE  GOTFIL       if ASCII 0-32, we have the filename
+       DEC  R1           don't have it yet, count down
+       JEQ  NOGOT        we done with arguments?
+       DEC  R2           we done with the 40 possible bytes of filename?
+       JNE  GETFIL       if not yet
+NOGOT  LI   R4,WORK+1
+GOTFIL DEC  R4           back to the previous byte
+       MOVB @NULL,*R4+   put a null after filename
+*
+       LI   R0,8         parse the filename
+       LI   R1,WORK      get logical filename from here
+       LI   R2,LEN+1     and put hardware name in the pab
+       CLR  R3           what the hell is an alias prefix?
+       XOP  @UTIL,0      go do the parse
+*
+* see if a filename exists in the command line
+*
+OKPTH  CLR  @STLEN       no string length yet
+       MOV  @LEN,R1      get length of total filename
+       CLR  R2           counter for bytes after the '.'
+FNDDOT CB   @FNAME-1(R1),@DECMAL
+       JEQ  GOTDOT       if we have a dot
+       INC  R2           bytes in the filename
+       DEC  R1           original bytes to device.filename
+       JNE  FNDDOT
+GOTDOT CI   R2,10        is filename too big?
+       JLE  OKLEN
+       B    @EXIT        yes, exit to mdos
+OKLEN  MOV  R1,@LEN      patch name length to show path only
+       MOV  R2,@STLEN    do we have anything?
+       JEQ  NOSRCH       if not, no search involved
+*
+* r2 contains the byte count of the string to search for
+* r1 contains the offset of the string from FNAME
+*
+       LI   R0,STRING
+       MOV  R2,R4             save length of string
+GETST  MOVB @FNAME(R1),*R0+   Put filename in string buffer
+       INC  R1
+       DEC  R2
+       JNE  GETST
+;*
+;* now look for a tick
+;*
+;;FTICK  CB   @STRING-1(R4),@TICK
+;;     JEQ  YETICK
+;      DEC  R4
+;      JNE  FTICK
+;      JMP  NOSRCH
+;
+;YETICK MOVB @STRING(R4),R5
+;      DEC  R4
+;      MOV  R4,@STLEN         save new filename length
+;      LI   R6,5              will hold the type number
+;FTYPE  CB   R5,@TYPES(R6)     is it a match?
+;      JEQ  TMATCH
+;      DEC  R6
+;      JNE  FTYPE
+;      BL   @TTYOUT           if an S, then it's invalid
+;      DATA IFT,0             invalid file type
+;      B    @NOPRN3
+;TMATCH SWPB R6
+;      MOVB R6,@TYPES    show the type of file to search for
+;;; TYPES is now set to 2 in the source. 4.2.2023
+;;
+
+*
+NOSRCH MOVB @NULL,@DIRTBL show no sub-directories yet
+
+;;     ABS  @PRINT
+;;     JEQ  OPENIT
+;;     LI   R0,PRN
+;;     MOVB @NULL,*R0
+;;     CALL @IO          open printer
+;;     LI   R0,60
+;;     MOV  R0,@PLINES
+*
+OPENIT LI   R0,FILE      point to the file pab
+       MOVB @NULL,*R0    patch for an open
+       XOP  @IO,0        go open it
+       MOVB @ERBYTE,R1   do we have an error?
+       JNE  EXIT         if something is in ERBYTE we do
+*
+FIRSTR LI   R0,FILE
+       MOVB @READ,*R0    throw away the first record
+       XOP  @IO,0
+*
+; GETKEY has a ctrl-c routine that closes file
+;
+READIT BL   @GETKEY      check for a key
+
+
+
+;      CB   R1,@P        wanna cancel printing?
+;      JNE  NOP1
+;      CLR  @PRINT
+;      LI   R0,PRN
+;      MOVB @CLOSE,*R0
+;      CALL @IO
+;      JMP  CONTIN
+;NOP1   CB   R1,@M
+;      JNE  CONTIN
+;      CLR  @MORE
+
+*
+CONTIN LI   R0,FILE      point to the pab
+       MOVB @READ,*R0    configure pab for a read
+       XOP  @IO,0        do a read
+       MOVB @ERBYTE,R0   get the error
+       JEQ  READIN       if no error
+*
+MORDIR LI   R0,FILE
+       MOVB @CLOSE,*R0
+       XOP  @IO,0        go close present file
+*
+* look to see if any more dirs need displaying
+*
+       MOV  @NXTDIR,R0   get next directory name location
+       MOVB *R0,R1       do we have more?
+       JEQ  CLOSIT       guess not
+       LI   R1,FNAME
+       CLR  @LEN         filename length in pab
+GETDIR MOVB *R0+,*R1+    move this directory name to pab
+       JNE  OKDIR        if it's not a null keep processing it
+       MOV  R0,@NXTDIR   else show next dirname location
+       JMP  OPENIT
+OKDIR  INC  @LEN
+       JMP  GETDIR
+*
+CLOSIT LI   R0,FILE      else close file
+       MOVB @CLOSE,*R0   put close opcode in the pab
+       XOP  @IO,0        do the close
+;;     ABS  @PRINT       we printing?
+;;     JEQ  NOPRN3       if not
+;;     LI   R0,PRN
+;;     MOVB @CLOSE,*R0   patch for a close
+;;     CALL @IO          close the printer
+NOPRN3 BL   @TTYOUT      else...
+       DATA NOMEM,2      ...print a CRLF
+EXIT   BLWP @0           and return back to mdos
+*
+* ok, let's look at the record just read into RECBUF
+*
+READIN
+OKREAD CLR  R8
+       LI   R10,RECBUF   point to the i/o buffer
+       MOVB *R10+,R8     see if we have a filename
+       JEQ  MORDIR       if there are no more filenames
+       SRL  R8,8         make filename length a word
+       MOV  R8,@PTHNAM   and save it's length
+       LI   R9,NAME      point to destination for move
+MOVFIL MOVB *R10+,*R9+   move the filename into the screen buffer
+       DEC  R8
+       JNE  MOVFIL
+*
+* get the file type
+*
+GFT    BL   @GETFPT      go get the floating point number
+       ABS  R1           absolute value of whatever is in r1, will be 1-6
+       CI   R1,6         is it a directory?
+       JNE  NODIR        nope
+*
+*  we have a sub-directory - save the whole pathname
+*  unless we are doing single level processing
+*
+       ABS  @SINGLE
+       JNE  CLOSIT          if so, it's time to quit
+       MOV  @DIRLOC,R6      get present dir-name location (DIRTBL)
+       CI   R6,WORK-40      are we out of memory?
+       JHE  NOTYPE          if so, don't save pathname
+       LI   R7,FNAME        get present pathname
+       MOV  @LEN,R8         and it's length
+MOVPP1 MOVB *R7+,*R6+       move pathname to table
+       DEC  R8              the present pathname length
+       JNE  MOVPP1          if not done, continue moving present path
+       LI   R7,NAME         now get dir name and add it to table name
+PTHNAM EQU  $+2
+       LI   R8,0            for this length
+MOVPP2 MOVB *R7+,*R6+       into the path buffer
+       DEC  R8
+       JNE  MOVPP2
+       MOVB @DECMAL,*R6+    put the dot at the end of dir name
+       MOVB @NULL,*R6+      patch buffer to show end of path
+       MOVB @NULL,*R6       and one more to show no more dirs
+       MOV  R6,@DIRLOC      show next available dirname location
+NOTYPE B    @READIT      else go show the match
+*
+
+; single directory processing.
+NODIR  CI   R1,5         a program?
+       JEQ  NOTYPE       yes, skip typing
+       SWPB R1           no
+       MOVB R1,@TYPE     it's type will be 1-4
+       SWPB R1
+       MOVB @KIND(R1),@TYPPAB+1  patch filepab with filetype
+       MOVB @TYPES(R1),@SHOWTP   patch filepab with filetype
+       BL   @CHKTYP      check for a type match
+       JNE  NOTYPE       if none
+       BL   @CHKFIL      check for a filename match
+       JNE  NOTYPE       if no match
+*
+* we have a typeable file
+*
+       MOV  @LEN,R0      get path length
+       MOV  R0,@TNAME-2  put path length in type pab
+       LI   R1,FNAME     path name location
+       LI   R2,TNAME     type filename pab name
+MPN    MOVB *R1+,*R2+
+       DEC  R0
+       JNE  MPN
+*
+       MOV  @PTHNAM,R0   get filename length
+       A    R0,@TNAME-2  add for total file length
+       LI   R1,NAME
+MFN    MOVB *R1+,*R2+
+       DEC  R0
+       JNE  MFN
+*
+* go do the printer, screen headers and directory info
+*
+       MOV  @PTHNAM,@FLEN
+       BLWP @PUTDIR      go put the dir and header info up
+       MOV  R0,R0        we gonna type it?
+       JNE  JUSTSC       nope if hi
+*
+       MOVB @NULL,@TYPPAB+2   error byte
+       CLR  @TYPPAB+6
+       CLR  @TYPPAB+8         in case it's a fixed file
+       LI   R0,TYPPAB
+       MOVB @NULL,*R0         show open opcode
+       XOP  @IO,0             go open it
+       MOVB @TYPPAB+2,R0      error?
+       JNE  CLSTYP
+*
+; Future: enable CTLC-C processing and close file(s) as needed
+;         disable this other keyboard activity
+;
+RDTYPE BL   @GETKEY      go check keyboard
+
+;      CB   R1,@CTRLX    wanna stop this file?
+;      JEQ  CLSTYP
+;      CB   R1,@CTRLS    wanna pause?
+;      JEQ  RDPAUS
+;      ANDI R1,>DF00
+;
+;;     CB   R1,@P        cancel printer?
+;;     JNE  NOP
+;;     CLR  @PRINT       ;;possible re-use
+;;     LI   R0,PRN
+;;     MOVB @CLOSE,*R0
+;;     CALL @IO
+;;     JMP  DORD
+
+;NOP    CB   R1,@M        cancel more routine
+;      JNE  DORD
+;      CLR  @MORE
+;      JMP  DORD
+
+;RDPAUS BL   @GETKEY
+;      CB   R1,@CTRLQ
+;      JNE  RDPAUS
+*
+DORD   LI   R0,TYPPAB
+       MOVB @READ,*R0         show read opcode
+       XOP  @IO,0             go read
+       MOVB @TYPPAB+2,R0
+       JNE  CLSTYP
+       MOV  @TCOUNT,R2
+       JNE  NELEN
+       INC  R2
+       MOVB @H32,@RECBUF
+NELEN  MOV  R2,@TC1
+*
+* strip control characters before printing
+*
+       LI   R1,RECBUF
+CHKH32 CB   @RECBUF-1(R2),@H32               see if it's printable
+       JL   BADCHR
+       CB   @RECBUF-1(R2),@H7F
+       JL   OKCHR
+BADCHR MOVB @H32,@RECBUF-1(R2)
+OKCHR  DEC  R2
+       JNE  CHKH32
+*
+;;;;;  BL   @PAUSE            go check for a pause   ;no, let's not
+
+       BL   @TTYOUT
+       DATA RECBUF
+TC1    DATA 0
+       BL   @TTYOUT
+       DATA NOMEM,2
+
+       JMP  RDTYPE
+
+;;     ABS  @PRINT
+;;     JEQ  RDTYPE
+;
+;;     DEC  @PLINES
+;;     JNE  NOFF
+;;     BL   @PRNFF
+;;NOFF   MOV  @TC1,R1
+;;     BL   @PRNREC
+;;     BL   @PRNCR
+;;     JMP  RDTYPE
+
+
+CLSTYP BL   @CLSRD
+JUSTSC B    @READIT
+CLSRD  LI   R0,TYPPAB
+       MOVB @CLOSE,*R0
+       XOP  @IO,0             go close file
+       RT
+*
+* write tty routine
+*
+TTYOUT MOV  *R11+,R8     get data address
+       MOV  *R11+,R9     get length of data to write
+TTY0   MOV  R9,R2        save length in r2 for the ttyout routine
+       LI   R10,WORK     for the move to hi memory
+       MOV  R10,R1       save for the ttyout routine
+TTY1   MOVB *R8+,*R10+   move em to hi memory
+       JEQ  TTY2         if we hit a null
+       DEC  R9           till r3 is zero
+       JNE  TTY1
+TTY2   LI   R0,>0027     do the actual ttyout routine
+       XOP  @VIDEO,0     xop @6,0
+       B    *R11
+*
+* get a floating point number
+*
+GETFPT MOVB *R10+,R8     see if it's an 8
+       CI   R8,>0800
+       JNE  GOTDIR       if it ain't a floating point number, we're done
+OKFPT  SRL  R8,8         make r8 a word
+       LI   R12,FPTBUF
+MOVFPT MOVB *R10+,*R12+  and move the floater
+       DEC  R8
+       JNE  MOVFPT
+       LI   R0,14        convert float to integer
+       LI   R2,FPTBUF    pointer to float source
+       XOP  @MATH,0      do the MDOS float to integer conversion
+GOTDIR RT                with integer returned in R1
+*
+* check for a filetype match
+*
+CHKTYP MOVB @TYPES,@TYPES     anything there?
+       JEQ  NOCARE            if a null, any filetype will do
+       CB   @TYPE,@TYPES      same as we are looking for?
+NOCARE RT
+*
+* check for a filename match
+* this was a real somebich (and it's SLOPPY but it works)
+*
+CHKFIL LWPI UTILWS
+       MOV  @STLEN,R2
+       JEQ  NOCAR2            if no filename match is required, it's =, exit
+       MOV  @PTHNAM,R3
+       C    R2,R3             search string cannot be greater than filename
+       JH   NOCAR2
+*
+       LI   R0,'??'           fill new string with wildcards
+       LI   R1,NEWSTR         new string goes here
+       LI   R2,5              10 bytes
+CLRNEW MOV  R0,*R1+
+       DEC  R2
+       JNE  CLRNEW
+*
+* look for an '*' in the search string
+*
+       LI   R12,10            10 possible bytes in filename
+       CLR  R1                pointer to string location
+       CLR  R4                pointer to new string location
+       MOV  @PTHNAM,R5        get filename length
+       MOV  @STLEN,R2         and string length
+       MOV  R2,R9             save string length for later
+FNDAST CB   @STRING(R1),@AST  compare byte in string to a '*'
+       JEQ  GOTAS1
+       MOVB @STRING(R1),@NEWSTR(R4)
+       INC  R1
+       INC  R4
+       DEC  R2
+       JNE  FNDAST
+       JMP  GOTAS2
+*
+GOTAS1 MOV  R5,R10            get original filename length end
+       MOV  R9,R11            get original string length end
+GOTAS4 MOVB @STRING-1(R11),@NEWSTR-1(R10)
+       DEC  R10               we done with filename length?
+       JEQ  GOTAS3
+       DEC  R11
+       JEQ  GOTAS3
+       DEC  R2                how many more bytes remaining?
+       JNE  GOTAS4
+*
+GOTAS3 MOVB @QMARK,@NEWSTR(R10)              patch over original '*'
+       MOV  @PTHNAM,R9        set length of string to same as filename
+*
+GOTAS2 MOV  R9,R2             search length
+       MOV  @PTHNAM,R4        filename length
+       C    R2,R4             are they the same length?
+       JNE  NOCAR2            if not, no match - exit
+*
+CHKMCH CB   @NEWSTR-1(R2),@QMARK
+       JEQ  GOTQM
+       CB   @NEWSTR-1(R2),@NAME-1(R2)
+       JNE  NOCAR2
+GOTQM  DEC  R2
+       JNE  CHKMCH
+NOCAR2 LWPI WS
+       JMP  NOCARE
+*
+GETKEY MOV  R11,@NOABRT+2
+       LI   R0,5         keymode 5
+       XOP  @KEY,0       go get a key from user
+       ANDI R1,>7F00     else strip the hi bit
+       CB   R1,@CTRLC    and see if it's a ^c
+       JNE  NOABRT       if it is, exit
+       BL   @CLSRD       go close file if open
+       B    @CLOSIT      then directory file
+NOABRT LI   R11,0
+       RT
+*
+* put the dir info and header to the screen and printer
+*
+PUTDIR DATA UTILWS,$+2
+       MOV  @TCOUNT+2,@FLEN
+       BL   @TTYOUT
+       DATA NOMEM,2      a crlf
+
+;;     ABS  @CONFRM      we confirming?
+;;     JEQ  NCFRM1
+;;     BL   @TTYOUT
+;;     DATA CFRM,0
+
+NCFRM1 MOV  @FLEN,R1
+       MOVB @DECMAL,@TNAME(R1)               dsk5.jj
+       INC  R1
+SHOWTP EQU  $+2
+       LI   R2,0
+       MOVB R2,@TNAME(R1)
+       INCT @FLEN
+       BL   @TTYOUT
+       DATA TNAME        print pathname to screen
+FLEN   DATA 0            for LEN bytes
+
+; what is being confirmed ?
+; probably eliminate this section
+;
+;;     ABS  @CONFRM      a question?
+;;     JEQ  NCFRM4
+;;     BL   @TTYOUT
+;;     DATA YNA,0
+;GETCFM BL   @GETKEY
+;
+;      CB   R1,@CTRLX    a no
+;      JEQ  NCFRMN
+;      ANDI R1,>DF00     make uppercase
+;      CB   R1,@Y        yes?
+;      JEQ  NCFRMY
+;      CB   R1,@N
+;      JEQ  NCFRMN
+;      CB   R1,@A
+;      JNE  GETCFM
+;      BL   @TTYOUT
+;      DATA A,1
+;      CLR  @CONFRM
+;      JMP  NCFRM4
+;
+;NCFRMN BL   @TTYOUT
+;      DATA N,1
+;      SETO @WS
+;      JMP  NCFRM5
+;NCFRMY BL   @TTYOUT
+;      DATA Y,1          yes, type it!
+;
+
+
+NCFRM4 CLR  @WS
+
+;;     ABS  @PRINT       we printing?
+;;     JEQ  NCFRM5
+;;     MOV  @PLINES,R1   see how many lines remain
+;;     C    R1,@VIDEO    at least 6?
+;;     JHE  DOCR
+;;     BL   @PRNFF
+;;DOCR   BL   @PRNCR       go print a crlf
+;;     BL   @PRNDIR
+;;     BL   @PRNCR
+;;     MOV  @PLINES,R0
+;;     AI   R0,-3
+;;     MOV  R0,@PLINES
+
+
+NCFRM5 BL   @TTYOUT      then a crlflf
+       DATA NOMEM-1,3
+PUTBYE RTWP
+;
+;;;;;;;<<<<<<<<<<<<<<<  THIS MIGHT BE WHERE WE TYPE to TIPI>>>>
+;
+*
+;;PRNFF  LI   R0,FF
+;;     MOV  R0,@PBUF
+;;     LI   R0,60
+;;     MOV  R0,@PLINES
+;;     LI   R1,1
+;;     JMP  PRNRC2
+*
+;;PRNDIR MOV  @FLEN,R1         get full filename length
+;;     LI   R0,TNAME          new print buffer
+;;     MOV  R0,@PBUF          patch printer pab to use TNAME as buffer
+;;     JMP  PRNRC2
+*
+;;PRNCR  LI   R0,NOMEM                         print crlf
+;;     MOV  R0,@PBUF
+;;     LI   R1,2
+;      JMP  PRNRC2
+*
+;PRNREC LI   R0,RECBUF
+;      MOV  R0,@PBUF     patch printer pab for recbuf
+;PRNRC2 MOV  R1,@PCOUNT   show 2 bytes to print
+;      JNE  OKPLEN
+;      INC  @PCOUNT      show 1 byte to print, a space
+;      MOVB @H32,@RECBUF
+;OKPLEN LI   R0,PRN
+;      MOVB @WRITE,*R0
+;      CALL @IO          go print header
+;      RT
+
+
+*
+;PAUSE  MOV  R11,@MORERT  save r11 for return
+;      ABS  @MORE        we pausing?
+;      JEQ  MORBYE       if equal
+;      DEC  @MORE        dec a line
+;      JNE  MORBYE       done yet?
+;      BL   @TTYOUT
+;      DATA MORMSG,7     more..<cr>
+;PAUSE2 BL   @GETKEY      pause for a key
+;      CB   R1,@H7F      was a key pressed?
+;      JEQ  PAUSE2
+;      CB   R1,@M        cancel this routine?
+;      JEQ  CANM
+;      CB   R1,@LILM
+;      JNE  YEAMOR
+;CANM   CLR  @LCOUNT      if so, clear line counter
+;YEAMOR BL   @TTYOUT      put 7 spaces
+;      DATA MORSP,7
+;      BL   @TTYOUT
+;      DATA NOMEM,1      then a carrage return
+;LCOUNT EQU  $+2
+;      LI   R11,21       patch MORE for another 22 lines
+;      MOV  R11,@MORE
+;MORERT EQU  $+2
+;MORBYE LI   R11,0        and return
+;      RT
+
+*
+* end of code, data follows
+*
+DIRLOC DATA DIRTBL
+NXTDIR DATA DIRTBL
+KEY    DATA 5            kscan xop
+VIDEO  DATA 6            video xop
+MEM    DATA 7
+IO     DATA 8            i/o xop
+TAB    EQU  $+1          point to the >09
+UTIL   DATA 9            utility xop
+MATH   DATA 10           math library and a ten for the multiply
+*
+SLASH  BYTE '/'
+LILS   BYTE 's'
+S      BYTE 'S'
+
+;C      BYTE 'C'
+;LILC   BYTE 'c'
+;CTRLS  BYTE 19
+
+CTRLC  BYTE 3
+
+;CTRLQ  BYTE 17
+;CTRLX  BYTE 24
+
+CLOSE  BYTE >01
+READ   BYTE >02
+WRITE  BYTE >03
+CLFNUL BYTE LF,CR,0
+       BYTE LF
+NOMEM  BYTE CR,LF
+       TEXT 'insufficient memory'
+       BYTE CR,LF
+NULL   BYTE 0
+IFT    BYTE CR,LF
+       TEXT 'invalid filetype'
+       BYTE CR,LF,0
+*
+HELP   BYTE CR,LF,9
+       TEXT 'XTYPE, GITHUB - John A. Johnson, Feb 29, 1989'
+       BYTE CR,LF,LF,9,9
+       TEXT 'Usage: XTYPE [path][afn][/pmsc?]'
+       BYTE CR,LF,0
+CFRM   TEXT 'Type '
+       BYTE 0
+
+;LILM
+;MORMSG TEXT 'more..'
+;      BYTE CR
+
+;P      TEXT 'P'
+;LILP   TEXT 'p'
+;M      TEXT 'M'
+
+H7F    BYTE >7F
+FF     BYTE 12
+H32
+
+;MORSP  TEXT '      '
+;      BYTE CR
+;YNA    TEXT ' (Y/N/A)? '
+;      BYTE 0
+;Y      TEXT 'Y'
+;N      TEXT 'N'
+;A      TEXT 'A'
+
+TYPE   BYTE ' '
+
+TYPES  BYTE 2     ;0 force dv80 4.02    will hold the filetype we search for
+
+       BYTE 'D'               display fixed
+       BYTE 'd'               display variable
+       BYTE 'I'               internal fixed
+       BYTE 'i'               internal variable
+KIND   BYTE 0
+       BYTE >04
+       BYTE >14         dv80 input
+       BYTE >0C
+       BYTE >1C
+*
+ZERO   BYTE 48
+AST    BYTE '*'
+DECMAL BYTE '.'
+QMARK  BYTE '?'
+TICK   BYTE '`'
+*
+* printer pab
+*
+PRN    DATA >0012,0
+PBUF   DATA WORK,0,254,0
+PCOUNT DATA 0,6
+PNAME  TEXT 'PIO.CR'
+*
+TYPPAB DATA 0,0,RECBUF,0,0,0
+TCOUNT DATA 0,6
+TNAME  BSS  40
+*
+* pab used to load directory file
+*
+       EVEN              start the pab on an even word boundry
+FILE   BYTE 0      0     >00 is OPEN
+       BYTE >0C    1     mode flag IF    0000 1100
+ERBYTE BYTE 0      2     the errors are returned here after the I/O
+       BYTE 0      3     not used
+       DATA RECBUF 4,5   buffer address
+       BYTE 0      6     \
+       BYTE 0      7      \
+       BYTE 0      8       \    not used
+       BYTE 0      9       /
+       BYTE 0     10      /
+       BYTE 0     11     /
+COUNT  BYTE 0     12     after the i/o, bytes read in is returned here
+       BYTE 0     13     as a word
+LEN    BYTE 0     14
+       BYTE >28   15     length of the text of name - let the parser do it
+FNAME  EQU  $            filename will go here - let the parser do it
+*
+MAP    EQU  FNAME+50     map info from MDOS will go here
+SINGLE EQU  MAP+10
+PRINT  EQU  SINGLE+2
+PLINES EQU  PRINT+2
+CONFRM EQU  PLINES+2
+MORE   EQU  CONFRM+2
+STLEN  EQU  MORE+2       string length
+STRING EQU  STLEN+2      string to search for
+NEWSTR EQU  STRING+10    new string to search for
+FPTBUF EQU  NEWSTR+10    floating point buffer
+RECBUF EQU  FPTBUF+20    i/o on the pab will put the record here
+LINE   EQU  RECBUF+256   build the screen print line here
+NAME   EQU  LINE         filename goes here
+DIRTBL EQU  LINE+256     put directory name tables here
+       END
