@@ -1,0 +1,14 @@
+       LWPI >F000
+       LIMI 0
+       LI   R12,>1800
+       SBO 0
+       SBZ 2
+       SBZ 3
+       SBZ 0
+       MOVB @T16,@>F112
+       MOV  R12,@>4008
+
+       BLWP @0
+T16    DATA >1600
+       END
+
