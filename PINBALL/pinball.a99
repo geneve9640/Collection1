@@ -1,0 +1,3163 @@
+*********************************************************************
+*
+* Pinball 99
+* For the TI-99/4A home computer
+*
+* March 2022 - June 2022
+* Rasmus Moustgaard <rasmus.moustgaard@gmail.com>
+*
+; Geneve modifications 2 July 2022 tt
+;  1) collission page mapping
+;  2) Speech page selection
+;  3) Commented F18A reset and F18A register unlock
+; 	Note: loader should clear v9938 regs 8-15
+;  4) Commented 0x6000 bank reset
+;  5) Speech code has its own banking
+;
+       copy "r.a99"
+       copy "macros.a99"
+       copy "sound-defs.a99"
+       copy "speech-defs.a99"
+
+;--------------------------------------------
+; [0] 4a standard code;  [<>0] use 9640 code
+
+Geneve9640 equ 1    ; (0=eq is /4a;  <>0 ne is 9640]
+
+      .ifne Geneve9640
+Geneve_bank_delta   equ >2000   ;adjust from >6000 to >4000 bank location
+      .else
+Geneve_bank_delta   equ 0
+      .endif
+
+;----------------------------------------------
+
+**
+* Constants
+*
+cheat_enabled:
+       equ  0
+screen_width_char:
+       equ  32
+screen_height_char:
+       equ  24
+screen_size_char:
+       equ  screen_width_char*screen_height_char
+screen_width:
+       equ  screen_width_char*8
+screen_height:
+       equ  screen_height_char*8
+map_width_char:
+       equ  32
+map_height_char:
+       equ  64
+map_width:
+       equ  map_width_char*8
+map_height:
+       equ  map_height_char*8
+info_panel_width_char:
+       equ  32
+info_panel_height_char:
+       equ  5
+info_panel_char_width:
+       equ  4
+info_panel_char_height:
+       equ  5
+info_panel_char_size:
+       equ  info_panel_char_width*info_panel_char_height
+info_panel_n_chars:
+       equ  info_panel_width_char/info_panel_char_width
+info_panel_map_width:
+       equ  3*info_panel_width_char
+info_panel_map_height:
+       equ  3*info_panel_height_char
+info_panel_map_size:
+       equ  info_panel_map_width*info_panel_map_height
+chr_space:
+       equ  0
+chr_zero:
+       equ  16
+play_field_width_char:
+       equ  screen_width_char
+play_field_top_char:
+       equ  info_panel_height_char
+play_field_height_char:
+       equ  screen_height_char-play_field_top_char
+play_field_size_char:
+       equ  play_field_height_char*screen_width_char
+play_field_width:
+       equ  play_field_width_char*8
+play_field_top:
+       equ  play_field_top_char*8
+play_field_height:
+       equ  play_field_height_char*8
+scroll_when_y_less_than:
+       equ  play_field_top+48
+scroll_when_y_greater_than:
+       equ  screen_height-48
+scroll_y_max:
+       equ  map_height-play_field_height-2
+sprite_y_offset:
+       equ  play_field_top
+ball_radius:
+       equ  7
+arm:
+       equ  4
+max_flipper_state:
+       equ  11
+coll_map_bank_height:
+       equ  32
+coll_map_bank:
+       equ  >6008
+
+coll_bank_base:
+       equ  >6000-Geneve_bank_delta  ;adjust bank 7.11
+
+speech_bank_base
+       equ  >6000-Geneve_bank_delta  ;added label 7.11, see speech.a99
+
+
+flipper_col_map_bank:
+       equ  >6028
+flipper_col_map_width:
+       equ  128
+flipper_col_map_height:
+       equ  64
+flipper_col_map_size:
+       equ  flipper_col_map_width*flipper_col_map_height
+plunger_y:
+       equ  496
+collision_type_none:
+       equ  0
+collision_type_background:
+       equ  1
+collision_type_left_flipper:
+       equ  2
+collision_type_right_flipper:
+       equ  3
+speech_bank:
+       equ  >6034
+attenuation_during_speech:
+       equ  6
+info_panel_north_x:
+       equ  info_panel_width_char
+info_panel_north_y:
+       equ  0
+info_panel_north_offset:
+       equ  info_panel_width_char
+info_panel_west_x:
+       equ  0
+info_panel_west_y:
+       equ  info_panel_height_char
+info_panel_west_offset:
+       equ  (info_panel_height_char*info_panel_map_width)
+info_panel_center_x:
+       equ  info_panel_width_char
+info_panel_center_y:
+       equ  info_panel_height_char
+info_panel_center_offset:
+       equ  (info_panel_height_char*info_panel_map_width)+info_panel_width_char
+info_panel_east_x:
+       equ  2*info_panel_width_char
+info_panel_east_y:
+       equ  info_panel_height_char
+info_panel_east_offset:
+       equ  (info_panel_height_char*info_panel_map_width)+(2*info_panel_width_char)
+info_panel_south_x:
+       equ  info_panel_width_char
+info_panel_south_y:
+       equ  2*info_panel_height_char
+info_panel_south_offset:
+       equ  (2*info_panel_height_char*info_panel_map_width)+info_panel_width_char
+
+**
+* Memory mapped addresses
+*
+vdpwd:                                 ; VDP write data
+       equ  >8c00
+vdpwa:                                 ; VDP set read/write address
+       equ  >8c02
+vdprd:                                 ; VDP read data
+       equ  >8800
+vdpsta:                                ; VDP status
+       equ  >8802
+sound:                                 ; Sound
+       equ  >8400
+spchwt:
+       equ  >9400
+spchrd:
+       equ  >9000
+
+
+**
+* VDP memory map
+*
+pattern_table:                         ; Pattern table x 4
+       equ  >0000
+sprite_pattern_table:                  ; Sprite pattern table
+       equ  >2000
+name_table:                            ; Name table x 2
+       equ  >2800
+sprite_attr_table:                     ; Sprite attribute table x 2
+       equ  >2b00
+color_table:                           ; Color table
+       equ  >2f00
+
+**
+* Scratch pad
+*
+pad:
+       equ  >8300
+wrksp:
+       equ  pad                        ; Workspace
+lsb_r0:
+       equ  wrksp+1
+lsb_r1:
+       equ  wrksp+3
+lsb_r2:
+       equ  wrksp+5
+lsb_r3:
+       equ  wrksp+7
+wrksp2:
+       equ  wrksp+>20
+stack:
+       equ  wrksp2+>20
+**
+* PAD constants
+*
+padcon:
+       equ  stack+>16                  ; Start of pad constants
+one:
+       equ  padcon
+two:
+       equ  one+2
+**
+* PAD variables
+*
+padvar:                                ; Start of pad variables
+       equ  two+2
+frame:
+       equ padvar
+double_buffer_flag:
+       equ  frame+2
+info_panel_updates:
+       equ  double_buffer_flag+2
+play_field_updates:
+       equ  info_panel_updates+2
+scroll_y:
+       equ  play_field_updates+2
+x:                                     ; Ball position x (FP 12.4)
+       equ  scroll_y+2
+y:                                     ; Ball position y (FP 12.4)
+       equ  x+2
+vx:                                    ; Ball velocity x (FP 8.8)
+       equ  y+2
+vy:                                    ; Ball velocity y (FP 8.8)
+       equ  vx+2
+ax:                                    ; Ball acceleration x (FP 8.8)
+       equ  vy+2
+ay:                                    ; Ball acceleration y (FP 8.8)
+       equ  ax+2
+nx:                                    ; Normal vector x (FP 8.8)
+       equ  ay+2
+ny:                                    ; Normal vector y (FP 8.8)
+       equ  nx+2
+dp:                                    ; Dot product of (vx,vy) and (nx,ny)
+       equ  ny+2
+rx:                                    ; Reflection vector x (FP 8.8)
+       equ  dp+2
+ry:                                    ; Reflection vector y (FP 8.8)
+       equ  rx+2
+x1:                                     ; Ball position x (FP 12.4)
+       equ  ry+2
+y1:                                     ; Ball position y (FP 12.4)
+       equ  x1+2
+pattern_and_color:
+       equ  y1+2
+keys:
+       equ  pattern_and_color+2
+left_flipper_state:
+       equ  keys+2
+right_flipper_state:
+       equ  left_flipper_state+2
+left_flipper_dir:
+       equ  right_flipper_state+2
+right_flipper_dir:
+       equ  left_flipper_dir+2
+collision_type:                        ; See collision_type equates
+       equ  right_flipper_dir+2
+special_collision:
+       equ  collision_type+2
+last_special:
+       equ  special_collision+2
+launch_speed:
+       equ  last_special+2
+player_status:
+       equ  launch_speed+2
+balls:
+       equ  player_status+2
+ball_no:
+       equ  balls+2
+score_msw:                             ; Low word of score
+       equ  ball_no+2
+score_lsw:                             ; High word of score
+       equ  score_msw+2
+bonus_multiplier:
+       equ  score_lsw+2
+event_queue_head:
+       equ  bonus_multiplier+2
+event_queue_tail:
+       equ  event_queue_head+2
+snd_channel_1:
+       equ  event_queue_tail+2
+snd_channel_2:
+       equ  snd_channel_1+snd_channel_size
+snd_channel_3:
+       equ  snd_channel_2+snd_channel_size
+snd_channel_4:
+       equ  snd_channel_3+snd_channel_size
+snd_track_1:
+       equ  snd_channel_4+snd_channel_size
+snd_track_2:
+       equ  snd_track_1+snd_track_size
+snd_track_3:
+       equ  snd_track_2+snd_track_size
+module_speed:
+       equ  snd_track_3+snd_track_size
+vdp_copy_pad:
+       equ  module_speed+2
+speech_detected:
+       equ  vdp_copy_pad+22
+speech_status:
+       equ  speech_detected+2
+speech_addr:
+       equ  speech_status+2
+speech_counter:
+       equ  speech_addr+2
+speech_read_pad:
+       equ  speech_counter+2
+pad_max:
+        equ  speech_read_pad+14
+
+********************************************************************************
+*
+* Main program
+*
+       aorg >2000
+main:
+       limi 0                          ; Interrupts off
+
+       lwpi wrksp                      ; Setup workspace
+       li   r10,stack                  ; Setup stack pointer
+       li   r15,vdpwd
+       bl   @one_time_init
+       li   r0,speech_welcome_idx
+       bl   @speak
+
+   .ifne Geneve9640
+    BLWP @INITRS   ;initialize debug output
+    BLWP @XMNUM
+    DATA >8200,30  ;show 60 page map bytes
+    BLWP @XMCRLF
+    BLWP @XMNUM
+    DATA >8000,4
+    BLWP @XMCRLF
+   .endif
+
+restart_game:
+       li   r0,tune2_module
+       bl   @play_module
+       bl   @init_game
+       bl   @init_ball
+       bl   @intro
+
+   .ifne Geneve9640
+    BLWP @XMNUM
+    DATA >8000,4
+    BLWP @XMCRLF
+   .endif 
+
+       li   r0,tune1_module
+       bl   @play_module
+restart_ball:
+       bl   @init_ball
+       clr  @frame
+
+   .ifne Geneve9640
+     BLWP @XMNUM
+     DATA >8000,4
+     BLWP @XMCRLF
+   .endif
+
+main_loop:
+       bl   @main_loop_body
+       mov  @player_status,r0
+       jeq  main_loop
+*      Ball lost
+       clr  @scroll_dir
+       clr  @left_flipper_state
+       clr  @right_flipper_state
+       bl   @play_ball_lost
+       li   r0,16
+       bl   @pause
+       clr  @vx
+       clr  @vy
+       mov  @frame,r0
+       andi r0,3
+       ai   r0,speech_down_the_drain_idx
+       bl   @speak
+       li   r0,120
+       bl   @pause
+       dec  @balls
+       jne  next_ball
+       bl   @game_over
+       jmp  restart_game
+next_ball:
+       inc  @ball_no
+       mov  @ball_no,r0
+       ai   r0,48                      ; ASCII 0
+       swpb r0
+       movb r0,@txt_ball_n+6
+       li   r0,txt_ball_n
+       bl   @display_text_east
+
+   .ifne Geneve9640
+      BLWP @XMNUM
+      DATA >8000,4
+      BLWP @XMCRLF
+   .endif
+
+       jmp  restart_ball
+
+********************************************************************************
+*
+* Intro
+*
+intro:
+       .proc
+       inc  @player_status
+       mov  @two,@scroll_dir
+       mov  @scroll_y,r0
+       ci   r0,scroll_y_max
+       jlt  intro_0
+       neg  @scroll_dir
+intro_0:
+       mov  @two,@scroll_counter
+intro_1:
+       li   r0,txt_pinball
+       bl   @display_text_north
+       li   r0,120
+       bl   @pause
+       abs  @pause_frames
+       jne  intro_2
+       li   r0,txt_99
+       bl   @display_text_center
+       li   r0,120
+       bl   @pause
+       abs  @pause_frames
+       jne  intro_2
+       li   r0,txt_version
+       bl   @display_text_north
+       li   r0,120
+       bl   @pause
+       abs  @pause_frames
+       jne  intro_2
+       li   r0,txt_version_no
+       bl   @display_text_center
+       li   r0,120
+       bl   @pause
+       abs  @pause_frames
+       jne  intro_2
+       li   r0,txt_hi_score
+       bl   @display_text_north
+       li   r0,120
+       bl   @pause
+       abs  @pause_frames
+       jne  intro_2
+       bl   @display_high_score
+       li   r0,120
+       bl   @pause
+       abs  @pause_frames
+       jeq  intro_1
+intro_2:
+       bl   @reset_score_buffer
+       clr  r0
+       bl   @add_score
+       .endproc
+*// intro
+
+********************************************************************************
+*
+* Game over
+*
+game_over:
+       .proc
+       clr  @new_high_score
+       c    @score_msw,@high_score_msw
+       jl   game_over_2   ;7.11 jlt
+       jh   game_over_1   ;7.11 jgt
+       c    @score_lsw,@high_score_lsw
+;;       jlt  game_over_2  ;7.11
+;;       jeq  game_over_2  ;7.11
+       jle  game_over_2
+game_over_1:
+       mov  @score_msw,@high_score_msw
+       mov  @score_lsw,@high_score_lsw
+       inc  @new_high_score
+game_over_2:
+       li   r0,speech_game_over_idx
+       bl   @speak
+       li   r0,txt_game
+       bl   @display_text_north
+       li   r0,60
+       bl   @pause
+       li   r0,txt_over
+       bl   @display_text_south
+       li   r0,120
+       bl   @pause
+       abs  @new_high_score
+       jeq  game_over_3
+       li   r0,speech_new_high_score_idx
+       bl   @speak
+       li   r0,txt_hi_score
+       bl   @display_text_north
+       li   r0,120
+       bl   @pause
+game_over_3:
+       bl   @display_score_buffer
+       li   r0,240
+       bl   @pause
+       .endproc
+*// game_over
+
+********************************************************************************
+*
+* Pause
+*
+* r0: number of frames to pause
+*
+pause:
+       .proc
+       mov  r0,@pause_frames
+       li   r2,32
+pause_1:
+       mov  @keys,r1
+       mov  @key_launch(r1),r0
+       bl   @check_key
+       jeq  pause_2
+       dec  r2
+       jne  pause_1
+pause_2:
+       bl   @main_loop_body
+       li   r1,keys_keyboard
+       mov  @key_launch(r1),r0
+       bl   @check_key
+       jne  pause_3
+       li   r1,keys_joystick
+       mov  @key_launch(r1),r0
+       bl   @check_key
+       jne  pause_3
+       dec  @pause_frames
+       jne  pause_2
+       jmp  pause_4
+pause_3:
+       mov  r1,@keys
+pause_4:
+       .endproc
+pause_frames:
+       data 0
+*// pause
+
+********************************************************************************
+*
+* Main loop body
+*
+main_loop_body:
+       .proc
+       bl   @vsync
+       bl   @set_vdp_regs
+       bl   @interrupt_routine
+       mov  @x,@x1
+       mov  @y,@y1
+       bl   @set_scroll_position
+       bl   @draw_info_panel
+       bl   @update_info_panel_view_position
+       bl   @draw_play_field
+       bl   @update_sprite_attr_table
+       bl   @interrupt_check
+       bl   @check_quit
+       .endproc
+*// main_loop_body
+
+********************************************************************************
+*
+* Interrupt check
+*
+* Changes r12 of calling workspace
+*
+interrupt_check:
+       clr  r12
+       tb   2                          ; Did an interrupt occur?
+       jne  interrupt_check_1          ; No - jump
+       rt
+*      Interrupt occurred
+interrupt_check_1:
+       .proc
+       movb @vdpsta,r12
+       bl   @interrupt_routine
+       .endproc
+*// interrupt_check
+
+********************************************************************************
+*
+* "Interrupt routine"
+*
+interrupt_routine:
+       mov  r10,@wrksp2+20             ; Use same SP in new workspace
+       lwpi wrksp2                     ; Switch to new workspace
+       bl   @module_player
+       bl   @speech_player
+       mov  @player_status,r0
+       jne  interrupt_routine_1
+*      Normal
+       bl   @user_input
+       bl   @move_ball
+       bl   @check_collision
+       bl   @move_flippers
+       bl   @move_ball
+       bl   @check_collision
+       jmp  interrupt_routine_2
+interrupt_routine_1:
+*      Ball lost
+       bl   @move_ball
+       bl   @move_ball
+interrupt_routine_2:
+       bl   @perform_events
+       inc  @frame
+       lwpi wrksp                      ; Switch to old workspace
+       b    *r11
+*// interrupt_routine
+
+*********************************************************************
+*
+* Wait for vertical retrace (CRU)
+*
+vsync:
+       movb @vdpsta,r12
+       clr  r12
+vsync_1:
+       tb   2                          ; Test CRU bit for VDP interrupt
+       jeq  vsync_1
+       movb @vdpsta,r12
+       rt
+*// vsync
+
+*********************************************************************************
+*
+* Set VDP registers
+*
+set_vdp_regs:
+       .proc
+*      Name table
+       mov  @double_buffer_flag,r0
+       andi r0,1
+       ori  r0,>0200+(name_table/>400)
+       bl   @vwtr                      ; Set name table
+*      Pattern table
+       mov  @scroll_y,r0               ; Scroll position
+       andi r0,>0006                   ; Only offsets 0, 2, 4, 6 supported
+       srl  r0,1                       ; Pattern table no
+       ori  r0,>0400+(pattern_table/>800)
+       bl   @vwtr                      ; Set pattern table
+*      Sprite attribute table
+       mov  @double_buffer_flag,r0
+       andi r0,1
+       ori  r0,>0500+(sprite_attr_table/>80)
+       bl   @vwtr                      ; Set sprite attribute table
+*      Flip flag
+       inv  @double_buffer_flag
+       .endproc
+*// set_vdp_regs
+
+*********************************************************************************
+*
+* Check for user input
+*
+user_input:
+       .proc
+       clr  @left_flipper_activated
+       clr  @left_flipper_dir
+       clr  @right_flipper_activated
+       clr  @right_flipper_dir
+       mov  @keys,r13
+*      Left flipper
+       mov  @key_left(r13),r0          ; Key left
+       bl   @check_key
+       jeq  user_input_2
+       mov  @frame,r0
+       andi r0,7
+       jne  user_input_1
+       bl   @roll_bonus_specials_left
+user_input_1:
+       bl   @activate_left_flipper
+user_input_2:
+*      Right flipper
+       mov  @key_right(r13),r0         ; Key right
+       bl   @check_key
+       jeq  user_input_4
+       mov  @frame,r0
+       andi r0,7
+       jne  user_input_3
+       bl   @roll_bonus_specials_right
+user_input_3:
+       bl   @activate_right_flipper
+user_input_4:
+*      Both
+       mov  @key_both(r13),r0          ; Key both
+       bl   @check_key
+       jeq  user_input_5
+       bl   @activate_left_flipper
+       bl   @activate_right_flipper
+       jmp  user_input_7
+user_input_5:
+       abs  @left_flipper_activated
+       jne  user_input_6
+       mov  @left_flipper_state,r0
+       jeq  user_input_6
+       dec  @left_flipper_state
+       dec  @left_flipper_dir
+user_input_6:
+       abs  @right_flipper_activated
+       jne  user_input_7
+       mov  @right_flipper_state,r0
+       jeq  user_input_7
+       dec  @right_flipper_state
+       dec  @right_flipper_dir
+user_input_7:
+       mov  @key_launch(r13),r0        ; Key launch
+       bl   @check_key
+       jeq  user_input_8
+*      Launch pressed
+       mov  @launch_speed,r0
+       ci   r0,>0600
+       jgt  user_input_10
+*      Add launch speed
+       ai   r0,>0018
+       mov  r0,@launch_speed
+       srl  r0,7
+       ai   r0,plunger_y
+       mov  r0,@plunger
+       jmp  user_input_10
+user_input_8:
+*      Launch not pressed
+       mov  @launch_speed,r0
+       jeq  user_input_10
+       li   r1,plunger_y
+       mov  r1,@plunger
+       clr  @launch_speed
+       mov  @x,r1
+       s    @x_init,r1
+       abs  r1
+       ci   r1,>0020
+       jgt  user_input_9
+       mov  @y_init,r1
+       s    @y,r1
+       abs  r1
+       ci   r1,>0020
+       jgt  user_input_9
+*      Launch
+       neg  r0
+       mov  r0,@vy
+       clr  @vx
+       mov  @x_init,@x
+       bl   @play_launch
+       bl   @display_score_buffer
+       jmp  user_input_12
+*      Nudge
+user_input_9:
+       ai   r0,->0300
+       sra  r0,4
+       a    r0,@vx
+       jmp  user_input_12
+*      Cheat
+user_input_10:
+       equ  $
+       .ifeq cheat_enabled,1
+       li   r0,KEY_A
+       bl   @check_key
+       jeq  user_input_11
+       li   r0,->0040                  ; ->0040
+       mov  r0,@vx
+       li   r0,->0080                  ; ->0080
+       mov  r0,@vy
+       jmp  user_input_12
+user_input_11:
+       li   r0,KEY_K
+       bl   @check_key
+       jeq  user_input_12
+       li   r0,>0040                   ; >0040
+       mov  r0,@vx
+       li   r0,->0080                  ; ->0080
+       mov  r0,@vy
+       .endif
+user_input_12:
+       .endproc
+*// user_input
+
+*********************************************************************************
+*
+* Activate left flipper
+*
+activate_left_flipper:
+       mov  @left_flipper_state,r0
+       ci   r0,max_flipper_state
+       jeq  activate_left_flipper_1
+       inc  @left_flipper_state
+       inc  @left_flipper_dir
+activate_left_flipper_1:
+       seto @left_flipper_activated
+       rt
+*// activate_left_flipper
+
+*********************************************************************************
+*
+* Activate right flipper
+*
+activate_right_flipper:
+       mov  @right_flipper_state,r0
+       ci   r0,max_flipper_state
+       jeq  activate_right_flipper_1
+       inc  @right_flipper_state
+       inc  @right_flipper_dir
+activate_right_flipper_1:
+       seto @right_flipper_activated
+       rt
+*// activate_right_flipper
+
+*********************************************************************************
+*
+* Move flippers
+*
+move_flippers:
+       mov  @left_flipper_state,r0
+       a    @left_flipper_dir,r0
+       jlt  move_flippers_1
+       ci   r0,max_flipper_state
+       jgt  move_flippers_1
+       mov  r0,@left_flipper_state
+move_flippers_1:
+       mov  @right_flipper_state,r0
+       a    @right_flipper_dir,r0
+       jlt  move_flippers_2
+       ci   r0,max_flipper_state
+       jgt  move_flippers_2
+       mov  r0,@right_flipper_state
+move_flippers_2:
+       rt
+*// move_flippers
+
+*********************************************************************************
+*
+* Move ball
+*
+move_ball:
+       .proc
+*      Accelerate
+       a    @ax,@vx
+       a    @ay,@vy
+*      Move x
+       mov  @vx,r0
+       sra  r0,4
+       mov  @x,r1
+       a    r0,r1
+       jlt  move_ball_1
+       ci   r1,(map_width-ball_radius)*16       ; *16 because of FP 12.4 format
+       jgt  move_ball_1
+       mov  r1,@x
+       jmp  move_ball_2
+move_ball_1:
+       neg  @vx
+move_ball_2:
+*      Move y
+       mov  @vy,r0
+       sra  r0,4
+       mov  @y,r1
+       a    r0,r1
+       jlt  move_ball_3
+       ci   r1,(map_height-ball_radius)*16      ; *16 because of FP 12.4 format
+       jlt  move_ball_4
+move_ball_3:
+       mov  @one,@player_status
+       ci   r1,(map_height-ball_radius+16)*16   ; *16 because of FP 12.4 format
+       jgt  move_ball_5
+move_ball_4:
+       mov  r1,@y
+move_ball_5:
+       .endproc
+*// move_ball
+
+*********************************************************************************
+*
+* Check for collision and rebounce ball according to normal vector.
+*
+* Modifies r0-r3
+*
+check_collision:
+       .proc
+       clr  @collision_type
+       bl   @check_flipper_collision
+       mov  r1,r1                      ; Test collision map value for flippers
+       jne  check_collision_1
+       bl   @get_background_collision_map_value
+       mov  r1,r1                      ; Test collision map value for background
+       jeq  check_collision_6          ; Zero means no collision
+check_collision_1:
+       dec  r1                         ; Convert to zero-based
+       bl   @calc_normal               ; Calculate n
+       bl   @calc_dot_product          ; r3=dot product of v and n
+       mov  @dp,r3
+       ci   r3,>fff8                   ; If positive (or slightly negative)
+       jgt  check_collision_2          ; the ball is moving in the same direction as the normal
+*      Reflection around normal
+       bl   @reflect
+*      Set velocity to (1 - 2^-damping) * (rx, ry)
+       mov  @rx,r0
+       mov  r0,r1
+       sra  r1,3                       ; 1/8
+       s    r1,r0
+       mov r0,@vx
+       mov  @ry,r0
+       mov  r0,r1
+       sra  r1,2                       ; 1/4
+       s    r1,r0
+!      mov r0,@vy
+*      Play sound
+       mov  @dp,r3
+       ci   r3,->0100
+       jgt  check_collision_2
+       mov  @special_collision,r0
+       jne  check_collision_2
+       bl   @play_hit
+*      Flipper push
+check_collision_2:
+       mov  @collision_type,r0
+       ci   r0,collision_type_left_flipper
+       jeq  check_collision_3          ; Left flipper
+       ci   r0,collision_type_right_flipper
+       jeq  check_collision_4          ; Right flipper
+       jmp  check_collision_6          ; Wall collision
+*      Left flipper collision
+check_collision_3:
+       mov  @left_flipper_dir,r0
+       jeq  check_collision_6
+       jlt  check_collision_6
+       mov  @y,r0
+       srl  r0,4
+       c    r0,@left_flipper_bottom_y
+       jhe  check_collision_6
+       mov  @x,r3
+       srl  r3,4
+       s    @left_flipper_center_x,r3
+       jlt  check_collision_6
+       mov  @left_flipper_state,r1
+       sla  r1,2
+       ai   r1,left_flipper_normals
+       jmp  check_collision_5
+*      Right flipper collision
+check_collision_4:
+       mov  @right_flipper_dir,r0
+       jeq  check_collision_6
+       jlt  check_collision_6
+       mov  @y,r0
+       srl  r0,4
+       c    r0,@right_flipper_bottom_y
+       jhe  check_collision_6
+       mov  @x,r3
+       srl  r3,4
+       neg  r3
+       a    @right_flipper_center_x,r3
+       jlt  check_collision_6
+       mov  @right_flipper_state,r1
+       sla  r1,2
+       ai   r1,right_flipper_normals
+check_collision_5:
+       mov  *r1+,@nx
+       mov  *r1,@ny
+       sla  r3,arm                     ; Length of flipper arm
+*      Add arm * (nx, ny) to velocity
+       mov  @nx,r0
+       mov  r3,r1
+       bl   @calc_signed_product
+       a    r0,@vx
+       mov  @ny,r0
+       mov  r3,r1
+       bl   @calc_signed_product
+       a    r0,@vy
+*      Play sound and display text
+*      Can happen multiple times during the same shot
+       bl   @play_launch
+       mov  @vy,r0
+       ci   r0,->0480
+       jgt  check_collision_6
+       li   r0,txt_kapow
+       bl   @display_text_north
+       li   r0,speech_good_shot_idx
+       bl   @speak
+check_collision_6:
+       mov  @special_collision,r0
+       jeq  check_collision_7
+       bl   @handle_special_collision
+       jmp  check_collision_8
+check_collision_7:
+       clr  @last_special
+check_collision_8:
+       .endproc
+*// check_collision
+
+*********************************************************************
+*
+* Perform events
+*
+perform_events:
+       .proc
+       mov  @event_queue_head,r3
+       c    r3,@event_queue_tail
+       jeq  perform_events_2
+       mov  @event_frame(r3),r1
+       c    r1,@frame
+       jh   perform_events_2
+*      Move head
+       mov  @event_queue_head,r4
+       ai   r4,event_size
+       ci   r4,event_queue_end
+       jl   perform_events_1
+       li   r4,event_queue
+perform_events_1:
+       mov  r4,@event_queue_head
+*      Perform event
+       mov  @event_function(r3),r1
+       mov  @event_param(r3),r0
+       bl   *r1                        ; Call function
+perform_events_2:
+       .endproc
+*// perform events
+
+*********************************************************************************
+*
+* Set scroll position depending on ball position
+*
+set_scroll_position:
+       .proc
+       mov  @player_status,r0
+       jeq  set_scroll_position_2
+       dec  @scroll_counter
+       jne  set_scroll_position_5
+       inct @scroll_counter
+       a    @scroll_dir,@scroll_y
+       mov  @two,@play_field_updates
+       mov  @scroll_y,r0
+       jeq  set_scroll_position_1
+       ci   r0,scroll_y_max
+       jlt  set_scroll_position_5
+set_scroll_position_1:
+       neg  @scroll_dir
+       jmp  set_scroll_position_5
+set_scroll_position_2:
+       mov  @y1,r0
+       srl  r0,4
+       s    @scroll_y,r0
+       ai   r0,sprite_y_offset
+*      Scroll up
+       mov  r0,r1
+       ai   r1,-scroll_when_y_less_than
+       jgt  set_scroll_position_3
+       mov  @scroll_y,r2
+       a    r1,r2
+       jgt  set_scroll_position_4
+       clr  r2
+       jmp  set_scroll_position_4
+set_scroll_position_3:
+*      Scroll down
+       mov  r0,r1
+       ai   r1,-scroll_when_y_greater_than
+       jlt  set_scroll_position_5
+       mov  @scroll_y,r2
+       a    r1,r2
+       ci   r2,scroll_y_max
+       jle  set_scroll_position_4
+       li   r2,scroll_y_max
+set_scroll_position_4:
+       andi r2,>fffe
+       c    r2,@scroll_y
+       jeq  set_scroll_position_5
+       mov  r2,@scroll_y
+       mov  @two,@play_field_updates
+set_scroll_position_5:
+       .endproc
+*// set_scroll_position
+
+*********************************************************************************
+*
+* Draw info panel
+*
+draw_info_panel:
+       .proc
+       mov  @info_panel_updates,r0
+       jeq draw_info_panel_3
+       dec  @info_panel_updates
+       mov  @double_buffer_flag,r0
+       andi r0,>400
+       ai   r0,name_table
+       bl   @vwad                      ; Setup write address
+       li   r1,info_panel_map
+       a    @info_panel_view_offset,r1
+       li   r3,info_panel_height_char  ; Number of rows to display
+draw_info_panel_2:
+       li   r2,info_panel_width_char/8
+       bl   @vdp_copy_pad
+       ai   r1,info_panel_map_width-info_panel_width_char
+       dec  r3
+       jne  draw_info_panel_2
+draw_info_panel_3:
+       .endproc
+*// draw_info_panel
+
+*********************************************************************************
+*
+* Update info panel view position
+*
+update_info_panel_view_position:
+       .proc
+       mov  @info_panel_view_steps,r0
+       jeq  update_info_panel_view_position_1
+       mov  @frame,r0
+       czc  @info_panel_view_update_mask,r0
+       jne  update_info_panel_view_position_1
+       a    @info_panel_view_dx,@info_panel_view_x
+       a    @info_panel_view_dy,@info_panel_view_y
+       bl   @calc_info_panel_view_offset
+       dec  @info_panel_view_steps
+       mov  @two,@info_panel_updates
+update_info_panel_view_position_1:
+       .endproc
+*// update_info_panel_view_position
+
+*********************************************************************************
+*
+* Update play field part of name table from map
+*
+half_field_size:
+       equ  play_field_size_char/2
+*
+draw_play_field:
+       .proc
+       mov  @play_field_updates,r0
+       jeq  draw_play_field_1
+       dec  @play_field_updates
+       mov  @double_buffer_flag,r0
+       andi r0,>400
+       ai   r0,name_table+(play_field_top_char*screen_width_char)
+       bl   @vwad                      ; Setup write address
+       mov  @scroll_y,r1               ; Scroll position
+       srl  r1,3                       ; Convert to character rows
+       sla  r1,5                       ; * map_width_char
+       ai   r1,MD0                     ; Add map base address
+       li   r2,half_field_size/8       ; 8 times unrolled
+       bl   @vdp_copy_pad
+       bl   @interrupt_check
+       li   r2,half_field_size/8       ; 8 times unrolled
+       bl   @vdp_copy_pad
+       bl   @interrupt_check
+draw_play_field_1:
+       .endproc
+*// draw_play_field
+
+*********************************************************************************
+*
+* Update sprites attribute table
+*
+update_sprite_attr_table:
+       .proc
+       mov  @double_buffer_flag,r0
+       andi r0,>80
+       ai   r0,sprite_attr_table+16    ; +16 for cover sprites
+       bl   @vwad
+*      Ball
+       mov  @y1,r0
+       srl  r0,4
+       s    @scroll_y,r0
+       ci   r0,-15
+       jlt  update_sprite_attr_table_1
+       ci   r0,play_field_height
+       jhe  update_sprite_attr_table_1
+       ai   r0,-ball_radius-1+sprite_y_offset
+       swpb r0
+       movb r0,*r15
+       mov  @x1,r0
+       srl  r0,4
+       ai   r0,-ball_radius
+       swpb r0
+       movb r0,*r15
+       movb @pattern_and_color,*r15
+       movb @pattern_and_color+1,*r15
+*      Flippers
+update_sprite_attr_table_1:
+       bl   @update_flippers_sprites
+*      Static sprites
+       bl   @update_static_sprites
+*      End marker
+       li   r1,>d000
+       movb r1,*r15
+       .endproc
+*// update_sprite_attr_table
+
+*********************************************************************************
+*
+* Update flipper sprites for all flippers
+*
+update_flippers_sprites:
+       .proc
+       mov  @double_buffer_flag,r0
+       jne  update_flippers_sprites_1
+*      Left then right
+       mov  @left_flipper_state,r0
+       li   r1,left_flipper
+       bl   @update_flipper_sprites
+       mov  @right_flipper_state,r0
+       li   r1,right_flipper
+       bl   @update_flipper_sprites
+       jmp  update_flippers_sprites_2
+update_flippers_sprites_1:
+*      Right then left
+       mov  @right_flipper_state,r0
+       li   r1,right_flipper
+       bl   @update_flipper_sprites
+       mov  @left_flipper_state,r0
+       li   r1,left_flipper
+       bl   @update_flipper_sprites
+update_flippers_sprites_2:
+       .endproc
+*// update_flippers_sprites:
+
+*********************************************************************************
+*
+* Update flipper sprite for one flipper
+*
+* r0: flipper state
+* r1: points to flipper structure
+*
+update_flipper_sprites:
+       mov  *r1+,r2                    ; Get flipper y
+       s    @scroll_y,r2               ; y position on screen
+       ai   r2,sprite_y_offset
+       ci   r2,screen_height
+       jhe  update_flipper_sprites_3
+       swpb r2
+       mov  *r1+,r3                    ; Get flipper x
+       swpb r3
+       andi r0,>000e                   ; Convert flipper state to word
+       a    r0,r1                      ; r1 now points to pointer to sprite list
+       mov  *r1,r1                     ; r1 now points to sprite list
+       mov  *r1+,r4                    ; get number of sprites
+update_flipper_sprites_1:
+       movb *r1+,r5                    ; Get y offset
+       ab   r2,r5                      ; Add screen y
+       movb r5,*r15                    ; Write y
+       movb *r1+,r5                    ; Get x offset
+       ab   r3,r5                      ; Add screen x
+       movb r5,*r15                    ; Write x
+       movb *r1+,*r15                  ; Write pattern
+       movb *r1+,*r15                  ; Write color
+       dec  r4
+       jne  update_flipper_sprites_1
+update_flipper_sprites_3:
+       rt
+*// update_flipper_sprites:
+
+*********************************************************************************
+*
+* Update static sprites
+*
+update_static_sprites:
+       mov  @frame,r4
+       andi r4,>0030
+       srl  r4,4
+       mov  @scroll_y,r0
+       mov  r0,r1
+       ai   r0,-16                     ; Sprites with y > this should be displayed
+       andi r1,>01c0                   ; Isolate bits for index lookup
+       srl  r1,5                       ; Shift to word offset
+       mov  @static_sprite_index(r1),r3 ; Get first relevant sprite from index
+*      Find first sprite to display
+update_static_sprites_1:
+       mov  *r3+,r1                    ; Get y
+       jlt  update_static_sprites_6    ; -1 = end
+       c    r1,r0                      ; Is y greater than the y value where it should be displayed?
+       jgt  update_static_sprites_1a
+       ai   r3,static_size-static_x    ; Skip over x, pattern, colors
+       jmp  update_static_sprites_1
+update_static_sprites_1a:
+*      Display until out of screen
+       mov  @scroll_y,r0
+       ai   r0,play_field_height       ; Sprites with y > this should not be displayed
+update_static_sprites_2:
+       c    r1,r0
+       jgt  update_static_sprites_6
+       s    @scroll_y,r1
+       dec  r1                         ; Adjust y coordinate
+       ai   r1,sprite_y_offset
+       swpb r1
+       movb r1,*r15                    ; Write y
+       movb *r3+,*r15                  ; Write x
+       movb *r3+,*r15                  ; Write pattern
+       movb *r3,r5                     ; Get color
+       jlt  update_static_sprites_4
+       movb r5,*r15
+       jmp  update_static_sprites_5
+*      Blink
+update_static_sprites_4:
+       mov  r3,r5                      ; Address of first color
+       a    r4,r5                      ; Add offset
+       movb *r5,r5
+       andi r5,>7f00
+       movb r5,*r15                    ; Write color
+*      Next sprite
+update_static_sprites_5:
+       ai   r3,static_size-static_color ; Skip over colors
+       mov  *r3+,r1                    ; Get y
+       jgt  update_static_sprites_2
+update_static_sprites_6:
+       rt
+*// update_static_sprites
+
+***************************************************************************
+*
+* Check quit
+*
+; Up and Fire triggers this on Geneve.
+;
+
+    .ifeq Geneve9640   ;7.11.2022 EQ is /4a
+
+; /4A quit routine
+check_quit:
+       clr  r1                         ; Test column 0
+       li   r12,>0024                  ; Address for column selection
+       ldcr r1,3                       ; Select column
+       li   r12,>0006                  ; Address to read rows
+       stcr r1,8
+       andi r1,>1100
+       jeq  quit
+       rt	;return
+
+quit   clr  @>83c4                     ; Reset user ISR address
+       seto @>6000                     ; Select first ROM bank  ;TT 7.2.22 not needed
+       li   r0,>3280                   ; Reset F18A
+       bl   @vwtr
+       blwp @>0000
+
+  
+    .else
+
+;Geneve quit routine NE
+
+   copy "geneve-check_quit.txt"
+
+   .endif
+
+*// check_quit
+
+*********************************************************************************
+*
+* Handle special collision
+*
+handle_special_collision:
+       .proc
+*      Find special
+       mov  @x,r0
+       srl  r0,4
+       mov  @y,r1
+       srl  r1,4
+       bl   @search_specials_bsp_tree  ; Get list of specials to serach
+handle_special_collision_1
+       mov  *r3+,r8                    ; Get special
+       jeq  handle_special_collision_2
+       c    r0,@special_x1(r8)
+       jl   handle_special_collision_1
+       c    r0,@special_x2(r8)
+       jhe  handle_special_collision_1
+       c    r1, @special_y1(r8)
+       jl   handle_special_collision_1
+       c    r1,@special_y2(r8)
+       jhe  handle_special_collision_1
+*      Special found
+       mov  @special_type(r8),r3
+       sla  r3,1
+       mov  @special_branch_table(r3),r3
+       jeq  handle_special_collision_2
+       bl   *r3
+handle_special_collision_2:
+       .endproc
+special_branch_table:
+       data 0
+       data handle_special_bumper
+       data handle_special_rollover
+       data handle_special_target
+       data handle_special_saucer
+       data handle_special_gate
+       data handle_special_launch
+*// handle_special_collision
+
+*********************************************************************************
+*
+* Search specials BSP tree
+*
+* r0: x value to seek
+* r1: y value to seek
+*
+* On return r3 contains a pointer to the list of specials
+*
+search_specials_bsp_tree:
+       li   r2,specials_bsp_tree
+search_specials_bsp_tree_1:
+*      Check node type
+       mov  *r2,r3                     ; mov  @bsp_node_type(r2),r3
+                                       ; ci   r3,bsp_node_type_leaf
+       jeq  search_specials_bsp_tree_5
+                                       ; ci   r2,bsp_node_type_split_y
+       jgt  search_specials_bsp_tree_2 ; jeq  search_specials_bsp_tree_2
+*      Split x
+       c    r0,@bsp_node_value(r2)
+       jlt  search_specials_bsp_tree_3
+       jmp  search_specials_bsp_tree_4
+*      Split y
+search_specials_bsp_tree_2:
+       c    r1,@bsp_node_value(r2)
+       jlt  search_specials_bsp_tree_3
+       jmp  search_specials_bsp_tree_4
+*      Take left branch
+search_specials_bsp_tree_3:
+       mov  @bsp_node_left(r2),r2
+       jmp  search_specials_bsp_tree_1
+*      Take right branch
+search_specials_bsp_tree_4:
+       mov  @bsp_node_right(r2),r2
+       jmp  search_specials_bsp_tree_1
+*      Leaf
+search_specials_bsp_tree_5:
+       mov  @bsp_node_value(r2),r3
+       rt
+*// search_specials_bsp_tree
+
+*********************************************************************************
+*
+* Handle special bumper
+*
+* r8 points to special structure
+*
+handle_special_bumper:
+       .proc
+       mov  @collision_type,r0
+       jeq  handle_special_bumper_2
+       c    r8,@last_special
+       jeq  handle_special_bumper_2
+       mov  r8,@last_special
+       a    @nx,@vx
+       a    @ny,@vy
+       mov  @special_static_sprite(r8),r7
+       jeq  handle_special_bumper_1
+       mov  @static_score(r7),r0
+       jeq  handle_special_bumper_1
+       bl   @add_score
+handle_special_bumper_1:
+       bl   @play_bumper
+handle_special_bumper_2:
+       .endproc
+*// handle_special_bumper
+
+*********************************************************************************
+*
+* Handle special rollover
+*
+* r8 points to special structure
+*
+handle_special_rollover:
+       .proc
+       c    r8,@last_special                           ; Same as last?
+       jeq  handle_special_rollover_4                  ; If yes then stop
+       mov  r8,@last_special                           ; Record as last
+       mov  @special_group(r8),r9                      ; Get the special group
+       jeq  handle_special_rollover_3                  ; If no group the just add score
+       mov  @special_group_type(r9),r0                 ; Get the group type
+       ci   r0,special_group_type_rollovers            ; Is it a group of rollovers?
+       jeq  handle_special_rollover_1                  ; Jump if yes
+       ci   r0,special_group_type_path                 ; Is it a path?
+       jeq  handle_special_rollover_2                  ; Jump if yes
+       jmp  handle_special_rollover_3                  ; None of the above, just add score
+*      Rollovers
+handle_special_rollover_1:
+       bl   @handle_special_group_rollovers
+       jmp  handle_special_rollover_4
+*      Path
+handle_special_rollover_2:
+       bl   @handle_special_group_path
+       jmp  handle_special_rollover_4
+*      Default
+handle_special_rollover_3:
+       mov  @special_static_sprite(r8),r7              ; Get sprite
+       jne  handle_special_rollover_3b
+       mov  @special_misc(r8),r0                       ; If no sprite, use misc as score
+       jeq  handle_special_rollover_3a
+       jmp  handle_special_rollover_3c
+handle_special_rollover_3b:
+       mov  @static_score(r7),r0                       ; Get the number of points to add
+       jeq  handle_special_rollover_3a
+handle_special_rollover_3c:
+       bl   @add_score                                 ; Add to score
+handle_special_rollover_3a:
+       bl   @play_rollover                             ; Play a sound
+handle_special_rollover_4:
+       .endproc
+*// handle_special_rollover
+
+*********************************************************************************
+*
+* Handle special group rollovers
+*
+* r8 points to special structure
+* r9 points to special group structure
+*
+handle_special_group_rollovers:
+       .proc
+       mov  @special_state(r8),r0                      ; Get state
+       jne  handle_special_group_rollovers_3           ; Stop if already lit
+       mov  @special_static_sprite(r8),r7              ; Get sprite
+       movb @static_lit_color(r7),@static_color(r7)    ; Change color
+       inc  @special_state(r8)                         ; Record as lit
+       inc  @special_group_state(r9)                   ; Count one as lit
+       mov  @special_group_state(r9),r0                ; Get the new state
+       andi r0,>000f                                   ; Last nybble is the number of specials lit
+       c    r0,@special_group_n_specials(r9)           ; All specials lit?
+       jlt  handle_special_group_rollovers_2           ; If no skip ahead
+       mov  @special_group_specials(r9),r0             ; Prepare to reset all specials
+       mov  @special_group_n_specials(r9),r2           ; Number of special to reset
+handle_special_group_rollovers_1:
+       mov  *r0+,r1                                    ; Get a special
+       dec  @special_state(r1)                         ; Record as unlit
+       mov  @special_static_sprite(r1),r1              ; Get its sprite
+       movb @static_unlit_color(r1),@static_color(r1)  ; Reset sprite color
+       dec  @special_group_state(r9)                   ; Count state backwards
+       dec  r2
+       jne  handle_special_group_rollovers_1           ; Loop until all done
+*      Light next sprite
+       mov  @special_group_state(r9),r1                ; Group state
+       andi r1,>00f0                                   ; 2nd last nybble is the number of sprites lit
+       srl  r1,4                                       ; To integer
+       c    r1,@special_group_n_sprites(r9)            ; All lit?
+       jhe  handle_special_group_rollovers_3           ; If yes just stop
+       sla  r1,1                                       ; To word offset
+       mov  @special_group_static_sprites(r9),r2       ; Pointer to list of sprites
+       a    r1,r2                                      ; Pointer to sprite
+       mov  *r2,r7                                     ; Get sprite
+       movb @static_lit_color(r7),@static_color(r7)    ; Change color
+       mov  @static_score(r7),@bonus_multiplier        ; Record bonus multiplier
+       li   r0,>0010                                   ; State value add
+       a    r0,@special_group_state(r9)                ; Record in state
+       mov  @static_text(r7),r0                        ; Text to display
+       jeq  handle_special_group_rollovers_3
+       bl   @display_text_west                         ; Display text
+       mov  @special_group_speech(r9),r0
+       jeq  handle_special_group_rollovers_3
+       bl   @speak
+       jmp  handle_special_group_rollovers_3
+handle_special_group_rollovers_2:
+       mov  @static_score(r7),r0                       ; Get the number of points to add
+       jeq  handle_special_group_rollovers_2a
+       bl   @add_score                                 ; Add to score
+handle_special_group_rollovers_2a:
+       bl   @play_rollover                             ; Play a sound
+handle_special_group_rollovers_3:
+       .endproc
+*// handle_special_group_rollovers:
+
+*********************************************************************************
+*
+* Handle special group path
+*
+* r8 points to special structure
+* r9 points to special group structure
+*
+handle_special_group_path:
+       .proc
+       mov  @vy,r0
+       jgt  handle_special_group_path_3
+       mov  @special_group_specials(r9),r0     ; Get pointer to start/end specials
+       mov  *r0+,r1                            ; Get special that marks the start of the path
+       mov  *r0,r2                             ; Get special that marks the end of the path
+       c    r8,r1                              ; Is it the start special?
+       jne  handle_special_group_path_1        ; Jump to end special if not
+*      Start special
+       mov  @special_misc(r1),r0
+       jeq  handle_special_group_path_3
+       mov  *r0+,@vx
+       mov  *r0,@vy
+       jmp  handle_special_group_path_3        ; Leave
+*      End special
+handle_special_group_path_1:
+       mov  @special_group_static_sprites(r9),r3
+       mov  @special_group_state(r9),r0
+       sla  r0,1
+       a    r0,r3
+       mov  *r3,r7
+       bl   @light_static_sprite
+       bl   @play_path
+       inc  @special_group_state(r9)
+       mov  @special_group_state(r9),r0
+       c    r0,@special_group_n_sprites(r9)            ; All lit?
+       jne  handle_special_group_path_3
+*      All lit
+       bl   @schedule_reset_special_group
+handle_special_group_path_3:
+       .endproc
+*// handle_special_group_path
+
+*********************************************************************************
+*
+* Handle special target
+*
+* r8 points to special structure
+*
+handle_special_target:
+       .proc
+       mov  @collision_type,r0
+       jeq  handle_special_target_4
+       c    r8,@last_special
+       jeq  handle_special_target_4
+       mov  r8,@last_special
+       mov  @special_state(r8),r0
+       jne  handle_special_target_4
+       inc  @special_state(r8)
+       mov  @special_static_sprite(r8),r7
+       bl   @light_static_sprite
+       bl   @play_target
+       mov  @special_group(r8),r9
+       inc  @special_group_state(r9)
+       c    @special_group_state(r9),@special_group_n_sprites(r9)
+       jlt  handle_special_target_4
+       bl   @schedule_reset_special_group
+handle_special_target_4:
+       .endproc
+*// handle_special_target
+
+*********************************************************************************
+*
+* Handle special saucer
+*
+* r8 points to special structure
+*
+handle_special_saucer:
+       .proc
+       c    r8,@last_special
+       jeq  handle_special_saucer_1
+       mov  r8,@last_special
+       mov  @special_static_sprite(r8),r1
+       clr  r0
+       movb @static_x(r1),r0
+       srl  r0,4
+       ai   r0,>0070
+       mov  r0,@x
+       clr  r0
+       mov  @static_y(r1),r0
+       sla  r0,4
+       ai   r0,>0070
+       mov  r0,@y
+       li   r0,120
+       clr  @vx
+       clr  @vy
+       clr  @ay
+       li   r1,launch_from_saucer
+       mov  r8,r2
+       bl   @schedule_event
+       bl   @play_saucer
+handle_special_saucer_1:
+       .endproc
+*// handle_special_saucer
+
+*********************************************************************************
+*
+* Launch from saucer
+*
+* r0 points to special structure
+*
+launch_from_saucer:
+       .proc
+       mov  r0,r8
+       mov  @special_group(r8),r9
+       mov  @special_group_state(r9),r0
+       sla  r0,1
+       a    @special_group_static_sprites(r9),r0
+       mov  *r0,r7                     ; Get sprite
+       bl   @light_static_sprite
+       bl   @play_saucer
+       inc  @special_group_state(r9)
+       c    @special_group_state(r9),@special_group_n_sprites(r9)
+       jne  launch_from_saucer_3
+       inc  @balls
+       bl   @schedule_reset_special_group
+       li   r0,120
+       li   r1,extra_ball
+       bl   @schedule_event
+launch_from_saucer_3:
+*      Release ball
+       clr  @vx
+       clr  @vy
+       mov  @ay_init,@ay
+       .endproc
+*// lauch_from_saucer
+
+*********************************************************************************
+*
+* Extra ball
+*
+extra_ball:
+       .proc
+       li   r0,txt_x_ball
+       bl   @display_text_north
+       li   r0,speech_extra_ball_idx
+       bl   @speak
+       .endproc
+*// extra_ball
+
+*********************************************************************************
+*
+* Handle special gate
+*
+* r8 points to special structure
+*
+handle_special_gate:
+       .proc
+       mov  @special_misc(r8),r0
+       jgt  handle_special_gate_1
+       jlt  handle_special_gate_2
+       jmp  handle_special_gate_4
+handle_special_gate_1:
+*      Right gate
+       mov  @vx,r0
+       jlt  handle_special_gate_4
+       jmp  handle_special_gate_3
+handle_special_gate_2:
+*      Left gate
+       mov  @vx,r0
+       jgt  handle_special_gate_4
+handle_special_gate_3:
+       mov  @vy,r0
+       ci   r0,->0080
+       jlt  handle_special_gate_4
+       neg  @vx
+       neg  @vy
+       bl   @play_hit
+handle_special_gate_4:
+       .endproc
+*// handle_special_gate
+
+*********************************************************************************
+*
+* Handle special launch
+*
+* r8 points to special structure
+*
+handle_special_launch:
+       mov  @collision_type,r0
+       jeq  handle_special_launch_2
+       mov  @vy,r0
+       sra  r0,1
+       ci   r0,>fff4
+       jlt  handle_special_launch_1
+       clr  r0
+handle_special_launch_1:
+       mov  r0,@vy
+handle_special_launch_2:
+       rt
+*// handle_special_launch
+
+*********************************************************************************
+*
+* Light static sprite, display text and score
+*
+* r7 points to static structure
+*
+light_static_sprite:
+       .proc
+       movb @static_lit_color(r7),@static_color(r7)    ; Change color
+       mov  @static_text(r7),r0
+       jeq  light_static_sprite_1                      ; Display text
+       bl   @display_text_south
+light_static_sprite_1:
+       mov  @static_speech(r7),r0
+       jeq  light_static_sprite_2                      ; Speak
+       bl   @speak
+light_static_sprite_2:
+       mov  @static_score(r7),r2                       ; Add points
+       jeq  light_static_sprite_4
+       mov  @static_text(r7),r0
+       jeq  light_static_sprite_3                      ; If there is was no text display score now
+       li   r0,120
+       li   r1,add_score
+       bl   @schedule_event                            ; Else schedule for later
+       jmp  light_static_sprite_4
+light_static_sprite_3:
+       mov  r2,r0
+       bl   @add_score
+light_static_sprite_4:
+       .endproc
+*// light_static_sprite
+
+*********************************************************************************
+*
+* Schedule reset special group, display text, display score
+*
+* r9 points to special group structure
+*
+schedule_reset_special_group:
+       .proc
+       li   r0,60
+       li   r1,reset_special_group
+       mov  r9,r2
+       bl   @schedule_event
+       mov  @special_group_score(r9),r2
+       jeq  schedule_reset_special_group_1
+       li   r0,120
+       li   r1,add_score
+       bl   @schedule_event
+schedule_reset_special_group_1:
+       mov  @special_group_speech(r9),r0
+       jeq  schedule_reset_special_group_2
+       bl   @speak
+schedule_reset_special_group_2:
+       .endproc
+*// schedule_reset_special_group
+
+*********************************************************************************
+*
+* Reset special group
+*
+* r0 points to special group structure
+*
+reset_special_group:
+       .proc
+       mov r0,r9
+       clr  @special_group_state(r9)
+*      Reset specials state
+       mov  @special_group_specials(r9),r0
+       mov  @special_group_n_specials(r9),r2
+       jeq  reset_special_group_2
+reset_special_group_1:
+       mov  *r0+,r8
+       clr  @special_state(r8)
+       dec  r2
+       jne  reset_special_group_1
+*      Reset sprite colors
+reset_special_group_2:
+       mov  @special_group_static_sprites(r9),r0
+       mov  @special_group_n_sprites(r9),r2
+       jeq  reset_special_group_4
+reset_special_group_3:
+       mov  *r0+,r7
+       movb @static_unlit_color(r7),@static_color(r7)
+       dec  r2
+       jne  reset_special_group_3
+*      Display text
+reset_special_group_4:
+       mov  @special_group_text(r9),r0
+       jeq  reset_special_group_5
+       bl   @display_text_south
+reset_special_group_5:
+       .endproc
+*// reset_special_group
+
+*************************-********************************************************
+*
+* Roll bonus specials left
+*
+roll_bonus_specials_left:
+       li   r1,special_group_bonus_rollovers
+       mov  @special_group_n_specials(r1),r2
+       mov  @special_group_specials(r1),r0
+       mov  *r0,r3                         ; Get first special in list
+       mov  @special_state(r3),r6          ; Save state
+roll_bonus_specials_left_1:
+       mov  *r0+,r3                        ; Get first special
+       ci   r2,1                           ; Is it the last?
+       jne  roll_bonus_specials_left_2     ; No, jump
+       mov  @special_group_specials(r1),r0 ; Roll around
+       mov  *r0,r4                         ; Get next special
+       mov  r6,r5                          ; Get saved state
+       jmp  roll_bonus_specials_left_3
+roll_bonus_specials_left_2:
+       mov  *r0,r4                         ; Get next special
+       mov  @special_state(r4),r5          ; Get state
+roll_bonus_specials_left_3:
+       mov  @special_static_sprite(r3),r7  ; Get first sprite
+       mov  r5,r5                          ; Is next lit?
+       jne  roll_bonus_specials_left_4     ; Jump if lit
+       clr  @special_state(r3)
+       movb @static_unlit_color(r7),@static_color(r7)
+       jmp  roll_bonus_specials_left_5
+roll_bonus_specials_left_4:
+       mov  @one,@special_state(r3)
+       movb @static_lit_color(r7),@static_color(r7)
+roll_bonus_specials_left_5:
+       dec  r2
+       jne  roll_bonus_specials_left_1
+       rt
+*// roll_bonus_specials_left
+
+*********************************************************************************
+*
+* Roll bonus specials right
+*
+roll_bonus_specials_right:
+       li   r1,special_group_bonus_rollovers
+       mov  @special_group_n_specials(r1),r2
+       mov  r2,r0
+       dec  r0
+       sla  r0,1
+       a  @special_group_specials(r1),r0
+       mov  r0,r7
+       mov  *r0,r3                         ; Get last special in list
+       mov  @special_state(r3),r6          ; Save state
+roll_bonus_specials_right_1:
+       mov  *r0,r3                         ; Get first special
+       ci   r2,1                           ; Is it the last?
+       jne  roll_bonus_specials_right_2    ; No, jump
+       mov  r7,r0                          ; Roll around
+       mov  *r0,r4                         ; Get next special
+       mov  r6,r5                          ; Get saved state
+       jmp  roll_bonus_specials_right_3
+roll_bonus_specials_right_2:
+       dect r0
+       mov  *r0,r4                         ; Get next special
+       mov  @special_state(r4),r5          ; Get state
+roll_bonus_specials_right_3:
+       mov  @special_static_sprite(r3),r7  ; Get first sprite
+       mov  r5,r5                          ; Is next lit?
+       jne  roll_bonus_specials_right_4    ; Jump if lit
+       clr  @special_state(r3)
+       movb @static_unlit_color(r7),@static_color(r7)
+       jmp  roll_bonus_specials_right_5
+roll_bonus_specials_right_4:
+       mov  @one,@special_state(r3)
+       movb @static_lit_color(r7),@static_color(r7)
+roll_bonus_specials_right_5:
+       dec  r2
+       jne  roll_bonus_specials_right_1
+       rt
+*// roll_bonus_specials_right
+
+*********************************************************************************
+*
+* Check for collision with flippers
+*
+check_flipper_collision:
+       .proc
+       li   r0,>0e00
+;       movb r0,@pattern_and_color+1
+*      Check y boundaries
+       mov  @y,r1
+       srl  r1,4
+       ci   r1,flippers_area_y_min
+       jl   check_flipper_collision_3
+       ci   r1,flippers_area_y_max
+       jhe  check_flipper_collision_3
+*      Check x boundaries
+       mov  @x,r0
+       srl  r0,4
+       ci   r0,left_flipper_area_x_min
+       jl   check_flipper_collision_3
+       ci   r0,left_flipper_area_x_max
+       jl   check_flipper_collision_1
+       ci   r0,right_flipper_area_x_min
+       jl   check_flipper_collision_3
+       ci   r0,right_flipper_area_x_max
+       jl   check_flipper_collision_2
+       jmp  check_flipper_collision_3
+*      Left flipper
+check_flipper_collision_1:
+       li   r0,collision_type_left_flipper
+       mov  r0,@collision_type
+       mov  @left_flipper_state,r0
+       andi r0,>000e
+       sla  r0,1
+       ai   r0,left_flipper_collision_maps
+       li   r1,left_flipper_col_map_y
+       bl   @get_flipper_collision_map_value
+;       jeq  !
+;       li   r0,>0800
+;       movb r0,@pattern_and_color+1
+;!
+       jmp  check_flipper_collision_4
+*      Right flipper
+check_flipper_collision_2:
+       li   r0,collision_type_right_flipper
+       mov  r0,@collision_type
+       mov  @right_flipper_state,r0
+       andi r0,>000e
+       sla  r0,1
+       ai   r0,right_flipper_collision_maps
+       li   r1,right_flipper_col_map_y
+       bl   @get_flipper_collision_map_value
+;       jeq  !
+;       li   r0,>0400
+;       movb r0,@pattern_and_color+1
+;!
+       jmp  check_flipper_collision_4
+check_flipper_collision_3:
+       li   r1,0
+check_flipper_collision_4:
+       .endproc
+*// check_flipper_collision
+
+*********************************************************************************
+*
+* Get flipper collision map value for ball
+*
+* r0: points to flipper collision map bank and address
+* r1: points to y and x coordinates of flipper collision map area
+*
+get_flipper_collision_map_value:
+       mov  *r0+,r2
+
+      .ifne Geneve9640
+         blwp @genevemap_r2	;set bank, r2
+      .else
+         seto *r2
+      .endif
+
+       mov  *r0,r0                     ; Map address
+
+      .ifne Geneve9640    ;adjust the collision address from >6000 to >4000 bank
+         ai  r0,-Geneve_bank_delta  ;; 7.2.2022
+      .endif
+
+       mov  @y,r2                      ; Ball y
+       srl  r2,4                       ; To integer
+       s    *r1+,r2                    ; Ball y - flipper start y
+       li   r3,flipper_col_map_width
+       mpy  r3,r2                      ; Line offset in r3
+       mov  @x,r2                      ; Ball x
+       srl  r2,4                       ; To integer
+       s    *r1,r2                     ; Ball x - flipper start x
+       a    r2,r0
+       a    r3,r0
+       clr  r1
+       movb *r0,r1
+       swpb r1
+       rt
+*// get_flipper_collision_map_value
+
+*********************************************************************************
+*
+* Get collision map value for ball
+*
+* Returns value in r1
+*
+* Modifies r0-r3
+*
+get_background_collision_map_value:
+       .proc
+       mov  @x,r0
+       srl  r0,4
+       mov  @y,r1
+       srl  r1,4
+       bl   @get_coll_value
+       mov  r1,r0
+       andi r0,>0080
+       mov r0,@special_collision
+       andi r1,>007f
+       jeq  get_background_collision_map_value_1
+       li   r0,collision_type_background
+       mov  r0,@collision_type
+get_background_collision_map_value_1:
+       .endproc
+*// get_background_collision_map_value
+
+
+
+*********************************************************************************
+*
+* Get background collision map value for given coordinates
+*
+* r0:  X coordinate
+* r1:  Y coordinate
+*
+* Returns value in r1
+*
+* The ROM contains the collision map split into banks of 8K.
+* Each bank contains 32 lines of 256 pixels of data ordered from top to bottom.
+* Each pixel is represented by one byte, which determines the normal angle (1-255),
+* or 0 if there is no collision.
+* The first bank is selected by writing to @coll_map_bank.
+*
+* Modifies r0-r2
+*
+get_coll_value:
+       mov  r1,r2                      ; Copy y
+       andi r1,>01e0
+       srl  r1,4                       ; Bank
+       ai   r1,coll_map_bank           ; Add base bank offset  (>6008)
+
+      .ifne Geneve9640
+         blwp @genevemap_r1	;map based on R1
+      .else
+         seto *r1
+      .endif
+
+       andi r2,>001f                   ; Line
+       swpb r2                         ; Line offset
+       a    r0,r2                      ; Add X
+       ai   r2,coll_bank_base          ; Add ROM bank base address (>6000) (>4000 Gen)
+
+       clr  r1                         ; Clear result reg
+       movb *r2,r1                     ; Get byte
+       swpb r1
+       rt
+*// get_coll_value
+
+*********************************************************************************
+*
+* Calculate normal vector at the given angle 0-127 in FP 8.8 format.
+
+* An angle of 0 corresponds to the normal pointing up (0,-1) and for
+* increasing angles the normals are rotated in a counter-clockwise direction.
+* 0 points up, 32 points left, 64 points down, and 96 points right.
+*
+* r1: angle (0-127)
+*
+* On return @nx contains the X coordinate and @ny contains the Y coordinate.
+*
+calc_normal:
+       sla  r1,2
+       ai   r1,normals
+       mov  *r1+,@nx
+       mov  *r1,@ny
+       rt
+*// calc_normal
+
+*********************************************************************************
+*
+* Calculate the reflection vector r of vector v around normal vector n.
+*
+* r = v − 2(v ⋅ n) n
+*
+* Input:
+* r3: dot product of v and n, i.e. v ⋅ n, in FP 8.8 format.
+* @vx: vx (FP 8.8)
+* @vy: vy (FP 8.8)
+* @nx: nx (FP 8.8)
+* @ny: ny (FP 8.8)
+*
+* On return @rx, @ry contain the reflection vector in in FP 8.8 format.
+*
+* Modified r0-r3
+*
+reflect:
+       .proc
+       sla  r3,1                       ; Multiply dot product by 2
+*      x
+       mov  r3,r0
+       mov  @nx,r1
+       bl   @calc_signed_product       ; r0=2*dot product*nx
+       neg  r0                         ; r0=-(2*dot product*nx)
+       a    @vx,r0                     ; r0=vx-(2*dot product*nx)
+       mov  r0,@rx
+*      y
+       mov  r3,r0
+       mov  @ny,r1
+       bl   @calc_signed_product       ; r0=2*dot product*ny
+       neg  r0                         ; r0=-(2*dot product*ny)
+       a    @vy,r0                     ; r0=vy-(2*dot product*ny)
+       mov  r0,@ry
+       .endproc
+*// reflect
+
+*********************************************************************************
+*
+* Calculate the (scalar) dot product of two vectors v and n in FP 8.8 format.
+*
+* v ⋅ n = vx * nx + vy * ny
+*
+* Input:
+* @vx: vx
+* @vy: vy
+* @nx: nx
+* @ny: ny
+*
+* On return @dp contains the result in FP 8.8 format.
+*
+* Modifies r0-r2
+*
+calc_dot_product:
+       .proc
+       mov  @vx,r0
+       mov  @nx,r1
+       bl   @calc_signed_product
+       mov  r0,@dp
+       mov  @vy,r0
+       mov  @ny,r1
+       bl   @calc_signed_product
+       a    r0,@dp
+       .endproc
+*// calc_dot_product
+
+*********************************************************************************
+*
+* Multiply two signed numbers in FP 8.8 format.
+*
+* Input:
+* r0: first number
+* r1: second number
+*
+* On return r0 contains the result in FP 8.8 format.
+*
+* Modifies r0-r2
+*
+calc_signed_product:
+       clr  r2                         ; Sign
+       mov  r0,r0                      ; Test sign of first number
+       jgt  !
+       inv  r2                         ; Flip sign
+       neg  r0                         ; Make positive
+!      mov  r1,r1                      ; Test sign of second number
+       jgt  !
+       inv  r2                         ; Flip sign
+       neg  r1                         ; Make positive
+!      mpy  r1,r0                      ; Multiply
+       movb r1,r0
+       swpb r0
+       mov  r2,r2                      ; Test sign
+       jeq  !
+       neg  r0                         ; Negate if sign is minus
+!      rt
+*// calc_signed_product
+
+*********************************************************************
+*
+* Display high score
+*
+display_high_score:
+       .proc
+       mov  @high_score_msw,r0
+       mov  @high_score_lsw,r1
+       bl   @update_score_buffer
+       bl   @display_score_buffer
+       .endproc
+*// display_high_score
+
+*********************************************************************
+*
+* Add score
+*
+* r0 contains the score to add
+*
+* Modifies r0-r4
+*
+add_score:
+       .proc
+       mpy  @bonus_multiplier,r0
+       a    r1,@score_lsw
+       jnc  add_score_1
+       inc  @score_msw
+add_score_1:
+       mov  @score_msw,r0
+       mov  @score_lsw,r1
+       bl   @update_score_buffer
+       mov  @info_panel_view_steps,r0
+       jne  add_score_2
+       bl   @display_score_buffer
+add_score_2:
+       .endproc
+*// add_score
+
+*********************************************************************
+*
+* Update score buffer
+*
+* r0: msw
+* r1: lsw
+*
+* Modifies r0-r4
+*
+update_score_buffer:
+       .proc
+       li   r2,8                       ; Counter
+       li   r3,10                      ; Divisor
+       li   r4,score_buffer+7          ; Start backwards
+*      Digit loop
+update_score_buffer_1:
+       div  r3,r0                      ; Divide to get digit as remainder in r1
+       ai   r1,chr_zero
+       swpb r1                         ; Swap to high byte
+       movb r1,*r4                     ; Store digit in buffer
+       dec  r4                         ; Next digit in buffer (working backwards)
+       mov  r0,r1
+       jeq  update_score_buffer_2
+       clr  r0
+       dec  r2                         ; Count down
+       jne  update_score_buffer_1      ; Digit loop
+update_score_buffer_2:
+       .endproc
+*// update_score_buffer
+
+*********************************************************************
+*
+* Display score buffer
+*
+display_score_buffer:
+       .proc
+       li   r0,score_buffer
+       li   r1,info_panel_buffer
+       mov  *r0+,*r1+
+       mov  *r0+,*r1+
+       mov  *r0+,*r1+
+       mov  *r0+,*r1+
+       li   r6,info_panel_center_offset
+       bl   @draw_info_panel_to_map
+       li   r0,info_panel_center_x
+       li   r1,info_panel_center_y
+       bl   @move_info_panel_view
+       mov  @two,@info_panel_updates
+       .endproc
+*// display_score_buffer
+
+*********************************************************************
+*
+* Reset score buffer
+*
+reset_score_buffer:
+       li   r0,score_buffer
+       li   r1,chr_zero*256+chr_zero
+       mov  r1,*r0+
+       mov  r1,*r0+
+       mov  r1,*r0+
+       mov  r1,*r0+
+       rt
+*// reset_score_buffer
+
+*********************************************************************
+*
+* Display text north
+*
+* r0: pointer to 8 characters of text to display
+*
+* Modifies r0-r4
+*
+display_text_north:
+       .proc
+       li   r6,info_panel_north_offset
+       bl   @display_text_at
+       li   r0,info_panel_north_x
+       li   r1,info_panel_north_y
+       bl   @move_info_panel_view
+       .endproc
+*// display_text_north
+
+*********************************************************************
+*
+* Display text west
+*
+* r0: pointer to 8 characters of text to display
+*
+* Modifies r0-r4
+*
+display_text_west:
+       .proc
+       li   r6,info_panel_west_offset
+       bl   @display_text_at
+       li   r0,info_panel_west_x
+       li   r1,info_panel_west_y
+       bl   @move_info_panel_view
+       .endproc
+*// display_text_west
+
+*********************************************************************
+*
+* Display text east
+*
+* r0: pointer to 8 characters of text to display
+*
+* Modifies r0-r4
+*
+display_text_east:
+       .proc
+       li   r6,info_panel_east_offset
+       bl   @display_text_at
+       li   r0,info_panel_east_x
+       li   r1,info_panel_east_y
+       bl   @move_info_panel_view
+       .endproc
+*// display_text_east
+
+*********************************************************************
+*
+* Display text south
+*
+* r0: pointer to 8 characters of text to display
+*
+* Modifies r0-r4
+*
+display_text_south:
+       .proc
+       li   r6,info_panel_south_offset
+       bl   @display_text_at
+       li   r0,info_panel_south_x
+       li   r1,info_panel_south_y
+       bl   @move_info_panel_view
+       .endproc
+*// display_text_south
+
+*********************************************************************
+*
+* Display text center
+*
+* r0: pointer to 8 characters of text to display
+*
+* Modifies r0-r4
+*
+display_text_center:
+       .proc
+       li   r6,info_panel_center_offset
+       bl   @display_text_at
+       li   r0,info_panel_center_x
+       li   r1,info_panel_center_y
+       bl   @move_info_panel_view
+       .endproc
+*// display_text_center
+
+*********************************************************************
+*
+* Display text
+*
+* r0: pointer to 8 characters of text to display
+*
+* Modifies r0-r6
+*
+display_text:
+       .proc
+       li   r6,info_panel_center_offset
+       bl   @display_text_at
+       .endproc
+*// display_text
+
+*********************************************************************
+*
+* Display text at
+*
+* r0: pointer to 8 characters of text to display
+* r6: draw offset
+*
+* Modifies r0-r6
+*
+display_text_at:
+       .proc
+       li   r1,info_panel_buffer
+       li   r2,info_panel_n_chars
+       li   r3,32*256
+display_text_at_1:
+       movb *r0+,r4
+       sb   r3,r4
+       movb r4,*r1+
+       dec  r2
+       jne  display_text_at_1
+       bl   @draw_info_panel_to_map
+       mov  @two,@info_panel_updates
+       .endproc
+*// display_text_at
+
+*********************************************************************************
+*
+* Draw info panel to map
+*
+* r6: draw offset
+*
+draw_info_panel_to_map:
+       ai   r6,info_panel_map
+       li   r4,MD2
+       li   r2,info_panel_n_chars
+       li   r5,info_panel_buffer
+draw_info_panel_to_map_1:
+       clr  r0
+       movb *r5+,r0                    ; Get char number
+       swpb r0
+       mpy  @w_info_panel_char_size,r0 ; Multiply by char size
+       a    r4,r1
+       li   r3,info_panel_height_char  ; Number of rows to display
+draw_info_panel_to_map_2:
+       movb *r1+,*r6+                  ; write to map
+       movb *r1+,*r6+
+       movb *r1+,*r6+
+       movb *r1+,*r6+
+       ai   r6,info_panel_map_width-4  ; Next row
+       dec  r3
+       jne  draw_info_panel_to_map_2
+       ai   r6,-info_panel_height_char*info_panel_map_width+4
+       dec  r2
+       jne  draw_info_panel_to_map_1
+       rt
+*// draw_info_panel_to_map
+
+*********************************************************************************
+*
+* Setup info panel view to move to new position
+*
+* r0: New x
+* r1: New y
+*
+move_info_panel_view:
+       s    @info_panel_view_x,r0
+       jne  move_info_panel_view_1
+*      x same
+       s    @info_panel_view_y,r1
+       jeq  move_info_panel_view_2
+*      x same, y different
+       mov  r1,r2
+       seto r2
+       jlt  !
+       neg  r2
+!      mov  r2,@info_panel_view_dy
+       clr  @info_panel_view_dx
+       abs  r1
+       mov  r1,@info_panel_view_steps
+       li   r0,7
+       mov  r0,@info_panel_view_update_mask
+       jmp  move_info_panel_view_2
+*      x different
+move_info_panel_view_1:
+       s    @info_panel_view_y,r1
+       jne  move_info_panel_view_2
+*      x different, y same
+       mov  r0,r2
+       seto r2
+       jlt  !
+       neg  r2
+!      mov  r2,@info_panel_view_dx
+       clr  @info_panel_view_dy
+       abs  r0
+       mov  r0,@info_panel_view_steps
+       li   r0,1
+       mov  r0,@info_panel_view_update_mask
+move_info_panel_view_2:
+       rt
+*// move_info_panel_view
+
+*********************************************************************************
+*
+* Clear info panel map
+*
+clear_info_panel_map:
+       li   r0,info_panel_map
+       li   r1,>f0f0
+       li   r2,info_panel_map_size
+clear_info_panel_map_1:
+       mov  r1,*r0+
+       dect r2
+       jne  clear_info_panel_map_1
+       rt
+*// clear_info_panel_map
+
+*********************************************************************************
+*
+* Calculate info panel view offset
+*
+calc_info_panel_view_offset:
+       mov  @info_panel_view_y,r0
+       mpy  @w_info_panel_map_width,r0
+       a    @info_panel_view_x,r1
+       mov r1,@info_panel_view_offset
+       rt
+*// calc_info_panel_view_offset
+
+*********************************************************************
+*
+* Schedule event
+*
+* r0: number of frames before execution
+* r1: address of function
+* r2: parameter to function
+*
+schedule_event:
+       mov  @event_queue_tail,r3
+       c    r3,@event_queue_head       ; Empty?
+       jeq  schedule_event_2
+*      Get last scheduled event
+       mov  r3,r4
+       ai   r4,-event_size
+       ci   r4,event_queue
+       jhe  schedule_event_1
+       li   r4,event_queue_end-event_size
+schedule_event_1:
+       a    @event_frame(r4),r0        ; Releative to previous
+       jmp  schedule_event_3
+schedule_event_2:
+       a    @frame,r0                  ; Relative to current frame
+*      Schedule new event
+schedule_event_3:
+       mov  r0,@event_frame(r3)
+       mov  r1,@event_function(r3)
+       mov  r2,@event_param(r3)
+       ai   r3,event_size
+       ci   r3,event_queue_end
+       jl   schedule_event_4
+       li   r3,event_queue
+schedule_event_4:
+       mov  r3,@event_queue_tail
+       rt
+*// schedule event
+
+*********************************************************************************
+*
+* Initialize game
+*
+init_game:
+       .proc
+       li   r0,>000e
+       mov  r0,@pattern_and_color
+       clr  @score_lsw
+       clr  @score_msw
+       bl   @reset_score_buffer
+       mov  @one,@bonus_multiplier
+       li   r0,3
+       mov  r0,@balls
+       mov  @one,@ball_no
+*      Reset static sprites
+       li   r1,static_sprites
+init_game_1:
+       movb @static_unlit_color(r1),@static_color(r1)
+       ai   r1,static_size
+       mov  *r1,r0
+       jgt  init_game_1
+*      Reset specials
+       li   r1,specials
+init_game_2:
+       clr  @special_state(r1)
+       ai   r1,special_size
+       mov  *r1,r0
+       jgt  init_game_2
+*      Reset special groups
+       li   r1,special_groups
+init_game_3:
+       clr  @special_group_state(r1)
+       ai   r1,special_group_size
+       mov  *r1,r0
+       jgt  init_game_3
+       .endproc
+*// init_game
+
+*********************************************************************************
+*
+* Initialize ball
+*
+init_ball:
+       .proc
+       li   r0,init_values
+       mov  *r0+,@x
+       mov  *r0+,@y
+       mov  *r0+,@vx
+       mov  *r0+,@vy
+       mov  *r0+,@ax
+       mov  *r0+,@ay
+       clr  @left_flipper_state
+       clr  @right_flipper_state
+       clr  @launch_speed
+       clr  @player_status
+       li   r0,event_queue
+       mov  r0,@event_queue_head
+       mov  r0,@event_queue_tail
+       mov  @two,@play_field_updates
+       li   r0,init_ball_special_states_to_clear
+init_ball_1:
+       mov  *r0+,r1
+       jeq  init_ball_2
+       clr  @special_state(r1)
+       jmp  init_ball_1
+init_ball_2:
+       .endproc
+init_ball_special_states_to_clear:
+       data special_launch_gate
+       data special_rollover_games_start
+       data special_rollover_games_end
+       data special_rollover_sams_start
+       data special_rollover_sams_end
+       data 0
+*// init_ball
+
+*********************************************************************************
+*
+* One time initializations
+*
+one_time_init:
+       .proc
+       li   r0,1
+       mov  r0,@one
+       inc  r0
+       mov  r0,@two
+       bl   @clear_pad
+       bl   @copy_vdp_copy_to_pad
+       bl   @copy_speech_read_to_pad
+       bl   @speech_check
+       bl   @graphics_mode
+       bl   @init_vdp_ram
+       li   r0,info_panel_width_char
+       mov  r0,@info_panel_view_x
+       li   r1,info_panel_height_char
+       mov  r1,@info_panel_view_y
+       bl   @calc_info_panel_view_offset
+       bl   @clear_info_panel_map
+       mov  @two,@info_panel_updates
+       clr  @double_buffer_flag
+       li   r0,keys_keyboard
+       mov  r0,@keys
+       .endproc
+*// one_time_init
+
+*********************************************************************************
+*
+* Clear PAD
+*
+clear_pad:
+       li   r1,padvar
+       li   r2,pad_max-padvar
+clear_pad_1:
+       clr  *r1+
+       dect r2
+       jne  clear_pad_1
+       rt
+*// clear_pad
+
+*********************************************************************************
+*
+* Copy VDP copy to PAD
+*
+copy_vdp_copy_to_pad:
+       li   r0,vdp_copy
+       li   r1,vdp_copy_pad
+       li   r2,vdp_copy_end-vdp_copy
+copy_vdp_copy_to_pad_1:
+       mov  *r0+,*r1+
+       dect r2
+       jne copy_vdp_copy_to_pad_1
+       rt
+*// copy_vdp_copy_to_pad
+
+*********************************************************************************
+*
+* Set graphics mode
+*
+graphics_mode:
+       .proc
+       li   r1,vregs2
+graphics_mode_1:
+       mov  *r1+,r0
+       jlt  graphics_mode_2
+       bl   @vwtr                      ; Set register
+       jmp  graphics_mode_1
+*      Return
+graphics_mode_2:
+       .endproc
+*      VDP registers
+vregs2:
+;;       byte >39,>1c                        ; Unlock F18A
+;;       byte >39,>1c                        ; Unlock F18A
+;;       byte >1e,>04                        ; F18A: Max 4 sprites on a scanline
+
+       byte >00,>00                        ; Graphics I mode
+       byte >01,>e2                        ; 16K, display on, interrupts enabled
+       byte >02,name_table/>400            ; Name table
+       byte >03,color_table/>40            ; Color table
+       byte >04,pattern_table/>800         ; Pattern table
+       byte >05,sprite_attr_table/>80      ; Sprite attribute table
+       byte >06,sprite_pattern_table/>800  ; Sprite pattern table
+       byte >07,>01                        ; Backdrop color
+       data -1
+*// graphics_mode
+
+*********************************************************************************
+*
+* Initialize VDP RAM
+*
+init_vdp_ram:
+       .proc
+       clr  r0
+       clr  r1
+       li   r2,>4000
+       bl   @vsmw
+*      Patterns
+       li   r0,pattern_table
+       li   r1,VPFRM0
+       mov  @TCHNUM,r2
+       sla  r2,3
+       bl   @vmbw
+       li   r0,pattern_table+>800
+       li   r1,VPFRM1
+       mov  @TCHNUM,r2
+       sla  r2,3
+       bl   @vmbw
+       li   r0,pattern_table+>1000
+       li   r1,VPFRM2
+       mov  @TCHNUM,r2
+       sla  r2,3
+       bl   @vmbw
+       li   r0,pattern_table+>1800
+       li   r1,VPFRM3
+       mov  @TCHNUM,r2
+       sla  r2,3
+       bl   @vmbw
+*      Info panel patterns
+       li   r0,240*8+pattern_table
+       li   r3,4
+init_vdp_ram_1:
+       li   r1,PAT240
+       li   r2,16*8
+       bl   @vmbw
+       ai   r0,>800
+       dec  r3
+       jne  init_vdp_ram_1
+*      Sprite patterns
+       li   r0,sprite_pattern_table
+       li   r1,sprite_patterns
+       li   r2,64*32
+       bl   @vmbw
+*      Cover sprites
+       li   r0,sprite_attr_table
+       li   r1,cover_sprites
+       li   r2,18
+       bl   @vmbw
+       li   r0,sprite_attr_table+>80
+       li   r1,cover_sprites
+       li   r2,18
+       bl   @vmbw
+*      Colors
+       li   r0,color_table
+       li   r1,CLRSET
+       mov  @CLRNUM,r2
+       bl   @vmbw
+       li   r0,color_table+30
+       li   r1,>b100
+       bl   @vsbw
+       movb r1,*r15
+       .endproc
+*// init_vdp_ram
+
+***************************************************************************
+*
+* Check key
+*
+* r0: Column in MSB: >0000 - >0700, Row in LSB: >0006 - >0014
+*
+*       Column   0      1    2    3    4    5     6       7
+*     Row
+*     >0006      =      .    ,    M    N    /    Fire    Fire
+*     >0008    Space    L    K    J    H    ;    Left    Left
+*     >000A    Enter    O    I    U    Y    P    Right   Right
+*     >000C             9    8    7    6    0    Down    Down
+*     >000E    Fctn     2    3    4    5    1    Up      Up
+*     >0010    Shift    S    D    F    G    A
+*     >0012    Ctrl     W    E    R    T    Q
+*     >0014             X    C    V    B    Z
+*
+* On return NEQ means that the key is pressed
+*
+
+
+KEY_FI EQU  >0606
+KEY_LF EQU  >0608
+KEY_RG EQU  >060A
+KEY_DN EQU  >060C
+KEY_UP EQU  >060E
+
+KEY_CM EQU  >0206
+KEY_FS EQU  >0106
+
+KEY_0  EQU  >050C
+KEY_1  EQU  >050E
+KEY_2  EQU  >010E
+KEY_3  EQU  >020E
+KEY_4  EQU  >030E
+KEY_5  EQU  >040E
+KEY_6  EQU  >040C
+KEY_7  EQU  >030C
+KEY_8  EQU  >020C
+KEY_9  EQU  >010C
+KEY_A  EQU  >0510
+KEY_B  EQU  >0414
+KEY_C  EQU  >0214
+KEY_D  EQU  >0210
+KEY_E  EQU  >0212
+KEY_F  EQU  >0310
+KEY_G  EQU  >0410
+KEY_H  EQU  >0408
+KEY_I  EQU  >020A
+KEY_J  EQU  >0308
+KEY_K  EQU  >0208
+KEY_L  EQU  >0108
+KEY_M  EQU  >0306
+KEY_N  EQU  >0406
+KEY_O  EQU  >010A
+KEY_P  EQU  >050A
+KEY_Q  EQU  >0512
+KEY_R  EQU  >0312
+KEY_S  EQU  >0110
+KEY_T  EQU  >0412
+KEY_U  EQU  >030A
+KEY_V  EQU  >0314
+KEY_W  EQU  >0112
+KEY_X  EQU  >0114
+KEY_Y  EQU  >040A
+KEY_Z  EQU  >0514
+
+KEY_SP EQU  >0008
+KEY_EN EQU  >000A
+KEY_FN EQU  >000E
+KEY_SH EQU  >0010
+KEY_CT EQU  >0012
+
+JOY_FI EQU  >0606
+JOY_LT EQU  >0608
+JOY_RT EQU  >060A
+JOY_DN EQU  >060C
+JOY_UP EQU  >060E
+*
+
+    .ifeq Geneve9640    ;include if /4a
+   
+check_key:
+       li   r12,>0024                  ; CRU address of the column decoder
+       ldcr r0,3                       ; Select column
+       andi r0,>00ff
+       mov  r0,r12                     ; Select row
+
+       tb   0                          ; Test key, EQ if not pressed
+       rt
+    .endif
+;///end 4a keyboard test
+
+
+***************************************************************************
+*
+* Program includes
+*
+
+    .ifne Geneve9640    ;keyboard and mapping
+       copy "Geneve-Support.txt"
+    .endif
+
+       copy "vdp.a99"
+       copy "sound-player.a99"
+       copy "music-player.a99"
+       copy "sound-fx-routines.a99"
+       copy "speech.a99"
+
+lower_memory_max:
+       equ  $
+
+***************************************************************************
+*
+* Data
+*
+       aorg >a000
+
+key_left:
+       equ  0
+key_right:
+       equ  2
+key_both:
+       equ  4
+key_launch:
+       equ  6
+
+keys_keyboard:
+       data KEY_Z
+       data KEY_M
+       data KEY_B
+       data KEY_SP
+
+keys_joystick:
+       data KEY_LF
+       data KEY_RG
+       data KEY_UP
+       data KEY_FI
+
+txt_pinball:
+       text 'PINBALL!'
+txt_99:
+       text ' * 99 * '
+txt_version:
+       text 'VERSION:'
+txt_version_no:
+       text '  1.1   '
+txt_hi_score:
+       text 'HI SCORE'
+txt_kapow:
+       text ' KAPOW! '
+txt_ball_n:
+       text ' BALL 0 '
+txt_bonus_x2:
+       text 'BONUS X2'
+txt_bonus_x3:
+       text 'BONUS X3'
+txt_bonus_x4:
+       text 'BONUS X4'
+txt_bonus_x6:
+       text 'BONUS X6'
+txt_bonus_x8:
+       text 'BONUS X8'
+txt_sams:
+       text 'SAMS MEM'
+txt_peb:
+       text '  PEB   '
+txt_f18a:
+       text 'F18A VDP'
+txt_32k:
+       text '32K RAM '
+txt_games:
+       text ' GAMES! '
+txt_parsec:
+       text ' PARSEC '
+txt_invaders:
+       text 'INVADERS'
+txt_munchman:
+       text 'MUNCHMAN'
+txt_tombstone:
+       text 'TMB CITY'
+txt_wumpus:
+       text ' WUMPUS '
+txt_apps:
+       text 'ALL APPS'
+txt_ea:
+       text 'ED/ASSM '
+txt_minimen:
+       text 'MINIMEM '
+txt_xb:
+       text '   XB   '
+txt_x_ball:
+       text ' X-BALL '
+txt_game:
+       text '  GAME  '
+txt_over:
+       text '  OVER  '
+
+init_values:
+       equ  $
+x_init:
+       data >0f40                      ; >0f40
+y_init:
+       data >1e80                      ; >1e80
+vx_init:
+       data >0000
+vy_init:
+       data >0000
+ax_init:
+       data >0000
+ay_init:
+       data >0004
+
+cover_sprites:
+       byte play_field_top-17,0,0,0
+       byte play_field_top-17,0,0,0
+       byte play_field_top-17,0,0,0
+       byte play_field_top-17,0,0,0
+       byte >d0,>00
+
+w_info_panel_map_width:
+       data info_panel_map_width
+w_info_panel_char_size:
+       data  info_panel_char_size
+
+**
+* Modifiable data
+*
+
+left_flipper_activated:
+       data 0
+right_flipper_activated:
+       data 0
+
+info_panel_buffer:
+       byte chr_space,chr_space,chr_space,chr_space
+       byte chr_space,chr_space,chr_space,chr_space
+info_panel_view_offset:
+       data 0
+info_panel_view_x:
+       data 0
+info_panel_view_y:
+       data 0
+info_panel_view_dx:
+       data 0
+info_panel_view_dy:
+       data 0
+info_panel_view_steps:
+       data 0
+info_panel_view_update_mask:
+       data 0
+
+info_panel_map:
+       bss info_panel_map_size
+
+score_buffer:
+       byte chr_zero,chr_zero,chr_zero,chr_zero
+       byte chr_zero,chr_zero,chr_zero,chr_zero
+
+event_frame:
+       equ  0
+event_function:
+       equ  2
+event_param:
+       equ  4
+event_size:
+       equ  6
+n_events:
+       equ  8
+event_queue:
+       bss  event_size*n_events
+event_queue_end:
+       equ  $
+
+scroll_dir:
+       data 0
+scroll_counter:
+       data 0
+
+high_score_msw:
+       data 0
+high_score_lsw:
+       data 10000
+new_high_score:
+       data 0
+
+***************************************************************************
+*
+* Data includes
+*
+       copy "static-sprites.a99"
+       copy "specials.a99"
+       copy "specials-bsp-tree.a99"
+sprite_patterns:
+       copy "sprite-patterns.a99"
+normals:
+       copy "normals.a99"
+       copy "map.a99"
+       copy "flippers.a99"
+       copy "sound-fx.a99"
+       copy "tune1-music.a99"
+       copy "tune2-music.a99"
+       copy "chars.a99"
+
+    .ifne Geneve9640
+       copy "Geneve-rs232debug.txt"
+    .endif
+
+
+
+upper_memory_max:
+       equ  $
+
+       end
