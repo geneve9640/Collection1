@@ -6,31 +6,11 @@
 * March 2022 - June 2022
 * Rasmus Moustgaard <rasmus.moustgaard@gmail.com>
 *
-; Geneve modifications 2 July 2022 tt
-;  1) collission page mapping
-;  2) Speech page selection
-;  3) Commented F18A reset and F18A register unlock
-; 	Note: loader should clear v9938 regs 8-15
-;  4) Commented 0x6000 bank reset
-;  5) Speech code has its own banking
-;
+
        copy "r.a99"
        copy "macros.a99"
        copy "sound-defs.a99"
        copy "speech-defs.a99"
-
-;--------------------------------------------
-; [0] 4a standard code;  [<>0] use 9640 code
-
-Geneve9640 equ 1    ; (0=eq is /4a;  <>0 ne is 9640]
-
-      .ifne Geneve9640
-Geneve_bank_delta   equ >2000   ;adjust from >6000 to >4000 bank location
-      .else
-Geneve_bank_delta   equ 0
-      .endif
-
-;----------------------------------------------
 
 **
 * Constants
@@ -109,14 +89,8 @@ coll_map_bank_height:
        equ  32
 coll_map_bank:
        equ  >6008
-
 coll_bank_base:
-       equ  >6000-Geneve_bank_delta  ;adjust bank 7.11
-
-speech_bank_base
-       equ  >6000-Geneve_bank_delta  ;added label 7.11, see speech.a99
-
-
+       equ  >6000
 flipper_col_map_bank:
        equ  >6028
 flipper_col_map_width:
@@ -346,49 +320,21 @@ pad_max:
        aorg >2000
 main:
        limi 0                          ; Interrupts off
-
        lwpi wrksp                      ; Setup workspace
        li   r10,stack                  ; Setup stack pointer
        li   r15,vdpwd
        bl   @one_time_init
-       li   r0,speech_welcome_idx
-       bl   @speak
-
-   .ifne Geneve9640
-    BLWP @INITRS   ;initialize debug output
-    BLWP @XMNUM
-    DATA >8200,30  ;show 60 page map bytes
-    BLWP @XMCRLF
-    BLWP @XMNUM
-    DATA >8000,4
-    BLWP @XMCRLF
-   .endif
-
 restart_game:
        li   r0,tune2_module
        bl   @play_module
        bl   @init_game
        bl   @init_ball
        bl   @intro
-
-   .ifne Geneve9640
-    BLWP @XMNUM
-    DATA >8000,4
-    BLWP @XMCRLF
-   .endif 
-
        li   r0,tune1_module
        bl   @play_module
 restart_ball:
        bl   @init_ball
        clr  @frame
-
-   .ifne Geneve9640
-     BLWP @XMNUM
-     DATA >8000,4
-     BLWP @XMCRLF
-   .endif
-
 main_loop:
        bl   @main_loop_body
        mov  @player_status,r0
@@ -410,6 +356,8 @@ main_loop:
        bl   @pause
        dec  @balls
        jne  next_ball
+       li   r0,60
+       bl   @pause
        bl   @game_over
        jmp  restart_game
 next_ball:
@@ -420,13 +368,6 @@ next_ball:
        movb r0,@txt_ball_n+6
        li   r0,txt_ball_n
        bl   @display_text_east
-
-   .ifne Geneve9640
-      BLWP @XMNUM
-      DATA >8000,4
-      BLWP @XMCRLF
-   .endif
-
        jmp  restart_ball
 
 ********************************************************************************
@@ -435,6 +376,9 @@ next_ball:
 *
 intro:
        .proc
+       li   r0,speech_welcome_idx
+       bl   @speak
+       clr  @ay
        inc  @player_status
        mov  @two,@scroll_dir
        mov  @scroll_y,r0
@@ -456,8 +400,9 @@ intro_1:
        bl   @pause
        abs  @pause_frames
        jne  intro_2
+*      Version
        li   r0,txt_version
-       bl   @display_text_north
+       bl   @display_text_west
        li   r0,120
        bl   @pause
        abs  @pause_frames
@@ -468,8 +413,22 @@ intro_1:
        bl   @pause
        abs  @pause_frames
        jne  intro_2
+*      By Rasmus M
+       li   r0,txt_by
+       bl   @display_text_east
+       li   r0,120
+       bl   @pause
+       abs  @pause_frames
+       jne  intro_2
+       li   r0,txt_rasmus_m
+       bl   @display_text_center
+       li   r0,120
+       bl   @pause
+       abs  @pause_frames
+       jne  intro_2
+*      High score
        li   r0,txt_hi_score
-       bl   @display_text_north
+       bl   @display_text_south
        li   r0,120
        bl   @pause
        abs  @pause_frames
@@ -494,11 +453,9 @@ game_over:
        .proc
        clr  @new_high_score
        c    @score_msw,@high_score_msw
-       jl   game_over_2   ;7.11 jlt
-       jh   game_over_1   ;7.11 jgt
+       jl   game_over_2
+       jh   game_over_1
        c    @score_lsw,@high_score_lsw
-;;       jlt  game_over_2  ;7.11
-;;       jeq  game_over_2  ;7.11
        jle  game_over_2
 game_over_1:
        mov  @score_msw,@high_score_msw
@@ -574,6 +531,7 @@ pause_frames:
 *
 main_loop_body:
        .proc
+       bl   @interrupt_check
        bl   @vsync
        bl   @set_vdp_regs
        bl   @interrupt_routine
@@ -598,10 +556,15 @@ main_loop_body:
 interrupt_check:
        clr  r12
        tb   2                          ; Did an interrupt occur?
-       jne  interrupt_check_1          ; No - jump
+       jne  interrupt_check_1          ; Yes - jump
        rt
 *      Interrupt occurred
 interrupt_check_1:
+       stwp r12
+       ci   r12,wrksp2                 ; Already in interrupt routine?
+       jne  interrupt_check_2          ; No - continue
+       rt
+interrupt_check_2:
        .proc
        movb @vdpsta,r12
        bl   @interrupt_routine
@@ -633,6 +596,7 @@ interrupt_routine_1:
        bl   @move_ball
 interrupt_routine_2:
        bl   @perform_events
+       bl   @speech_player
        inc  @frame
        lwpi wrksp                      ; Switch to old workspace
        b    *r11
@@ -643,13 +607,15 @@ interrupt_routine_2:
 * Wait for vertical retrace (CRU)
 *
 vsync:
+       .proc
        movb @vdpsta,r12
-       clr  r12
 vsync_1:
+       bl   @speech_player
+       clr  r12
        tb   2                          ; Test CRU bit for VDP interrupt
        jeq  vsync_1
        movb @vdpsta,r12
-       rt
+       .endproc
 *// vsync
 
 *********************************************************************************
@@ -775,6 +741,8 @@ user_input_8:
        jmp  user_input_12
 *      Nudge
 user_input_9:
+       c    @x,@x_launch_lane
+       jhe  user_input_12
        ai   r0,->0300
        sra  r0,4
        a    r0,@vx
@@ -865,6 +833,13 @@ move_ball:
 *      Accelerate
        a    @ax,@vx
        a    @ay,@vy
+*      No x movement in lanch lane
+       c    @x,@x_init
+       jne  move_ball_0
+       c    @y,@y_launch_lane
+       jl   move_ball_0
+       clr  @vx
+move_ball_0:
 *      Move x
        mov  @vx,r0
        sra  r0,4
@@ -1116,6 +1091,7 @@ draw_info_panel_2:
        li   r2,info_panel_width_char/8
        bl   @vdp_copy_pad
        ai   r1,info_panel_map_width-info_panel_width_char
+       bl   @interrupt_check
        dec  r3
        jne  draw_info_panel_2
 draw_info_panel_3:
@@ -1334,12 +1310,6 @@ update_static_sprites_6:
 *
 * Check quit
 *
-; Up and Fire triggers this on Geneve.
-;
-
-    .ifeq Geneve9640   ;7.11.2022 EQ is /4a
-
-; /4A quit routine
 check_quit:
        clr  r1                         ; Test column 0
        li   r12,>0024                  ; Address for column selection
@@ -1348,23 +1318,14 @@ check_quit:
        stcr r1,8
        andi r1,>1100
        jeq  quit
-       rt	;return
-
+*      Return
+       rt
+*      Quit
 quit   clr  @>83c4                     ; Reset user ISR address
-       seto @>6000                     ; Select first ROM bank  ;TT 7.2.22 not needed
+       seto @>6000                     ; Select first ROM bank
        li   r0,>3280                   ; Reset F18A
        bl   @vwtr
        blwp @>0000
-
-  
-    .else
-
-;Geneve quit routine NE
-
-   copy "geneve-check_quit.txt"
-
-   .endif
-
 *// check_quit
 
 *********************************************************************************
@@ -1768,16 +1729,26 @@ handle_special_gate_4:
 *
 handle_special_launch:
        mov  @collision_type,r0
-       jeq  handle_special_launch_2
+       jne  handle_special_launch_0
+       clr  @special_launch_collision
+       jmp  handle_special_launch_2
+handle_special_launch_0:
+       abs  @special_launch_collision
+       jne  handle_special_launch_2
+       seto @special_launch_collision
        mov  @vy,r0
        sra  r0,1
-       ci   r0,>fff4
+       ci   r0,->0040
        jlt  handle_special_launch_1
        clr  r0
+       mov  @x_init,@x
+       mov  @y_init,@y
 handle_special_launch_1:
        mov  r0,@vy
 handle_special_launch_2:
        rt
+special_launch_collision:
+       data 0
 *// handle_special_launch
 
 *********************************************************************************
@@ -2026,19 +1997,8 @@ check_flipper_collision_4:
 *
 get_flipper_collision_map_value:
        mov  *r0+,r2
-
-      .ifne Geneve9640
-         blwp @genevemap_r2	;set bank, r2
-      .else
-         seto *r2
-      .endif
-
+       seto *r2                        ; Select ROM bank
        mov  *r0,r0                     ; Map address
-
-      .ifne Geneve9640    ;adjust the collision address from >6000 to >4000 bank
-         ai  r0,-Geneve_bank_delta  ;; 7.2.2022
-      .endif
-
        mov  @y,r2                      ; Ball y
        srl  r2,4                       ; To integer
        s    *r1+,r2                    ; Ball y - flipper start y
@@ -2081,8 +2041,6 @@ get_background_collision_map_value_1:
        .endproc
 *// get_background_collision_map_value
 
-
-
 *********************************************************************************
 *
 * Get background collision map value for given coordinates
@@ -2104,19 +2062,12 @@ get_coll_value:
        mov  r1,r2                      ; Copy y
        andi r1,>01e0
        srl  r1,4                       ; Bank
-       ai   r1,coll_map_bank           ; Add base bank offset  (>6008)
-
-      .ifne Geneve9640
-         blwp @genevemap_r1	;map based on R1
-      .else
-         seto *r1
-      .endif
-
+       ai   r1,coll_map_bank           ; Add base bank offset
+       seto *r1                        ; Select bank
        andi r2,>001f                   ; Line
        swpb r2                         ; Line offset
        a    r0,r2                      ; Add X
-       ai   r2,coll_bank_base          ; Add ROM bank base address (>6000) (>4000 Gen)
-
+       ai   r2,coll_bank_base          ; Add ROM bank base address
        clr  r1                         ; Clear result reg
        movb *r2,r1                     ; Get byte
        swpb r1
@@ -2480,6 +2431,7 @@ display_text_at_1:
 * r6: draw offset
 *
 draw_info_panel_to_map:
+       .proc
        ai   r6,info_panel_map
        li   r4,MD2
        li   r2,info_panel_n_chars
@@ -2500,9 +2452,10 @@ draw_info_panel_to_map_2:
        dec  r3
        jne  draw_info_panel_to_map_2
        ai   r6,-info_panel_height_char*info_panel_map_width+4
+       bl   @interrupt_check
        dec  r2
        jne  draw_info_panel_to_map_1
-       rt
+       .endproc
 *// draw_info_panel_to_map
 
 *********************************************************************************
@@ -2765,10 +2718,9 @@ graphics_mode_2:
        .endproc
 *      VDP registers
 vregs2:
-;;       byte >39,>1c                        ; Unlock F18A
-;;       byte >39,>1c                        ; Unlock F18A
-;;       byte >1e,>04                        ; F18A: Max 4 sprites on a scanline
-
+       byte >39,>1c                        ; Unlock F18A
+       byte >39,>1c                        ; Unlock F18A
+       byte >1e,>04                        ; F18A: Max 4 sprites on a scanline
        byte >00,>00                        ; Graphics I mode
        byte >01,>e2                        ; 16K, display on, interrupts enabled
        byte >02,name_table/>400            ; Name table
@@ -2866,17 +2818,13 @@ init_vdp_ram_1:
 *
 * On return NEQ means that the key is pressed
 *
-
-
 KEY_FI EQU  >0606
 KEY_LF EQU  >0608
 KEY_RG EQU  >060A
 KEY_DN EQU  >060C
 KEY_UP EQU  >060E
-
 KEY_CM EQU  >0206
 KEY_FS EQU  >0106
-
 KEY_0  EQU  >050C
 KEY_1  EQU  >050E
 KEY_2  EQU  >010E
@@ -2913,43 +2861,30 @@ KEY_W  EQU  >0112
 KEY_X  EQU  >0114
 KEY_Y  EQU  >040A
 KEY_Z  EQU  >0514
-
 KEY_SP EQU  >0008
 KEY_EN EQU  >000A
 KEY_FN EQU  >000E
 KEY_SH EQU  >0010
 KEY_CT EQU  >0012
-
 JOY_FI EQU  >0606
 JOY_LT EQU  >0608
 JOY_RT EQU  >060A
 JOY_DN EQU  >060C
 JOY_UP EQU  >060E
 *
-
-    .ifeq Geneve9640    ;include if /4a
-   
 check_key:
        li   r12,>0024                  ; CRU address of the column decoder
        ldcr r0,3                       ; Select column
        andi r0,>00ff
        mov  r0,r12                     ; Select row
-
        tb   0                          ; Test key, EQ if not pressed
        rt
-    .endif
-;///end 4a keyboard test
-
+*// check_key
 
 ***************************************************************************
 *
 * Program includes
 *
-
-    .ifne Geneve9640    ;keyboard and mapping
-       copy "Geneve-Support.txt"
-    .endif
-
        copy "vdp.a99"
        copy "sound-player.a99"
        copy "music-player.a99"
@@ -2990,10 +2925,14 @@ txt_pinball:
        text 'PINBALL!'
 txt_99:
        text ' * 99 * '
+txt_by:
+       text '   BY   '
+txt_rasmus_m:
+       text 'RASMUS M'
 txt_version:
        text 'VERSION:'
 txt_version_no:
-       text '  1.1   '
+       text '  1.5   '
 txt_hi_score:
        text 'HI SCORE'
 txt_kapow:
@@ -3060,6 +2999,11 @@ ax_init:
 ay_init:
        data >0004
 
+x_launch_lane:
+       data >0e80
+y_launch_lane:
+       data >0700
+
 cover_sprites:
        byte play_field_top-17,0,0,0
        byte play_field_top-17,0,0,0
@@ -3115,7 +3059,7 @@ event_param:
 event_size:
        equ  6
 n_events:
-       equ  8
+       equ  12
 event_queue:
        bss  event_size*n_events
 event_queue_end:
@@ -3150,12 +3094,6 @@ normals:
        copy "tune1-music.a99"
        copy "tune2-music.a99"
        copy "chars.a99"
-
-    .ifne Geneve9640
-       copy "Geneve-rs232debug.txt"
-    .endif
-
-
 
 upper_memory_max:
        equ  $
