@@ -1,0 +1,27 @@
+Pinball 99 Loader v0.95 for the Geneve 9640
+
+       Based on EXEC 2.7 (C)Barry Boone, Updated by Insane Multitasker
+
+       Pinball is written by Rasmus Moustgaard
+
+         PINROM256         v1.5 ROM from the /4A distribution; unchanged
+         PINLOAD           Geneve native OS program; file loader
+         PINBALL,M,N,O     Pinball program, modified for Geneve use
+
+       Place all files in the same path.  Load as follows:
+
+       PINLOAD PINBALL
+
+       The file PINROM256 will automatically load from the same path as PINLOAD
+
+       ROM banking simulation is achieved by using >4000-5FFF and Geneve memory
+       map support. Keyboard routine is modified to support Geneve keyscan.
+
+       Future release may simplify the loader requirements to eliminate the
+       separate program image load.
+
+History:
+7-15-2023 Updated from v1.1 to v1.5.  Fixed speech.
+7-16-2022 Updates for keyboard support
+7-6-2022  Initial release
+

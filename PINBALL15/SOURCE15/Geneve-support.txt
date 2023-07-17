@@ -1,0 +1,181 @@
+; Geneve-support.txt
+;
+; COPY statement in pinball.a99
+;
+; Contains simple mapper routines to tie into the Pinball 
+; bank switch calls (via register)
+;
+; check_key routine provides responses that Pinball expects,
+; accordding to the CRU row/column that was selected. We use
+; a simple table test and compare to the desired key, then
+; change the EQ bit for the return.  Not the prettiest code.
+;
+; Insane Multitasker - AtariAge.com
+;
+
+      .ifne Geneve9640
+; 
+; Geneve map routine
+; Multiple entry points for the various register usage encountered
+;
+Genevemapws         bss >20
+Genevemap_r0 data genevemapws,genmap0
+Genevemap_r1 data genevemapws,genmap1
+Genevemap_r2 data genevemapws,genmap2
+Genevemap_r5 data genevemapws,genmap5
+Genevemap_r6 data genevemapws,genmap6
+
+genmap0      mov  *r13,R1
+             jmp  genmapcom
+genmap1      mov  @2(R13),R1
+             jmp  genmapcom
+genmap2      mov  @4(R13),R1
+             jmp  genmapcom
+genmap5      mov  @10(R13),R1
+             jmp  genmapcom
+genmap6      mov  @12(R13),R1
+             jmp  genmapcom
+
+genmapcom    andi r1,>00FF    ;mask it
+             srl  r1,1	;divide by 2
+             ai   r1,>8200+8	;location of our page map
+             movb *r1,@>8002   ;set the mapper to our page      
+             rtwp
+;;      .else
+;;Genevebankoff equ 0    ;do NOT adjust from >6000 to >4000 for /4a     
+      .endif
+
+;///end banking support
+
+    .ifne Geneve9640
+;
+; check_key for Geneve
+; assume R12 and R0 can be trashed based on TI code
+;
+; Test the caller code
+; If the CRU matches, perform a keyscan; if not, return.
+; check for valid key
+; check for match to the ascii character corresponding to CRU
+; return EQ or NE
+
+check_key:
+  .proc    ;save r11 to stack
+
+     mov  @>8370,@save8370
+     mov  @>8372,@save8372
+     mov  @>8374,@save8374
+     mov  @>8376,@save8376
+     mov  @>837c,@save837c
+     mov  @>83f8,@save83f8
+     mov  @>8002,@save8002    
+
+    li r12,keys_keyboard
+    c  r0,*R12+     ;four keys to test for CRU match
+    jeq  gen_key_found
+    c  r0,*R12+
+    jeq  gen_key_found
+    c  r0,*R12+
+    jeq  gen_key_found
+    c  r0,*R12+
+    jeq  gen_key_found
+
+
+; not a keyboard call, so pass to joystick cru
+; first, restore r11 from stack
+       dect r10
+       mov  *r10,r11
+       li   r12,>0024                  ; CRU address of the column decoder
+       ldcr r0,3                       ; Select column
+       andi r0,>00ff
+       mov  r0,r12                     ; Select row
+       tb   0                          ; Test key, EQ if not pressed
+       rt
+
+; keyboard detection, let's see what we get.
+gen_key_found
+      blwp @genkk 
+
+;;    stwp r11          ;store workspace
+;;    mov  r11,@WSTT+2  ;self-modify
+;;    movb @H05,@>8374   ;set mode 5
+;;    lwpi >83e0        ;operate in GPLWS land
+;;    bl  @>E           ;keyscan 
+;;WSTT   LWPI >0000     ;restore workspace (self-modified) 
+
+     clr  r11
+     movb @>8375,r11
+;    jlt  gen_key_notfound  ;redundant for now
+
+    ci   r11,>2000   ;bypass mask if space. Clean this later.
+    jeq  chksp
+
+    andi R11,>DF00
+
+;    jmp  gen_key_notfound
+  
+chksp ai  r12,-keys_keyboard-2	;compute offset [0,2,4,6]
+      cb   @keys_geneve(R12),r11 
+      jne  gen_key_notfound
+
+
+yesgen seto r0        ;found (NEQ)
+       jmp  genkeyrt   
+
+gen_key_notfound
+    clr r0         ;not found (EQ)
+genkeyrt
+     mov  @save8370,@>8370
+     mov  @save8372,@>8372
+     mov  @save8374,@>8374
+     mov  @save8376,@>8376
+     mov  @save837c,@>837c
+     mov  @save83f8,@>83f8
+     mov  @save8002,@>8002
+
+;cannot use endproc, the dec/move destroy the EQ bit 
+
+       dect r10
+       mov  *r10,r11
+
+       abs r0    ;SET NE; CLR EQ
+
+        b    *r11
+
+; bl instruction modifies R11. Must save/restore.
+; 
+; we are just using the Geneve's version of the console
+; rom keyscan routine.  
+;
+
+genkeyws bss >20
+genkk   data genkeyws,genk1
+genk1   limi 0
+        movb @H05,@>8374   ;set mode 5
+        lwpi >83e0        ;operate in GPLWS land
+        mov r11,@save83f6
+        bl  @>E           ;keyscan 
+        mov @save83f6,r11 
+        lwpi genkeyws
+        rtwp
+
+keys_geneve
+    BYTE 'Z',0    ;be sure to ANDI >5F for capital letters
+    BYTE 'M',0
+    BYTE 'B',0
+    BYTE >20,0
+HFF BYTE >FF
+H05 BYTE >05
+save8370 data 0   ;dsr
+save8372 data 0   ;
+save8374 data 0   ;mode|keyreturn
+save8376 data 0   ;joy
+save837c data 0   ;status
+save83f6 data 0   ;gplws r11
+save83f8 data 0   ;gplws r12
+save8002 data 0   ;geneve mapper
+
+     .endif  
+; // end extra key routines
+
+
+

@@ -1,0 +1,37 @@
+; Geneve-check_quite.txt
+;
+; Simple keyscan to check for ESCAPE key (instead of FCTN-QUIT)
+;
+; Local data used instead of the stack, to minimize potential issues
+;
+; Insane Multitasker - AtariAge.com
+
+gen_escape data >1b00+155 ;ESCape key >1B or 155 (mode 4,5)
+
+check_quit:
+     mov  @>8370,@save8370
+     mov  @>8372,@save8372
+     mov  @>8374,@save8374
+     mov  @>8376,@save8376
+     mov  @>837c,@save837c
+     mov  @>83f8,@save83f8
+     mov  @>8002,@save8002    
+
+    blwp @genkk 
+
+      cb  @gen_escape,@>8375
+      jeq quit
+      cb  @gen_escape+1,@>8375
+      jeq quit
+    
+     mov  @save8370,@>8370
+     mov  @save8372,@>8372
+     mov  @save8374,@>8374
+     mov  @save8376,@>8376
+     mov  @save837c,@>837c
+     mov  @save83f8,@>83f8
+     mov  @save8002,@>8002
+     rt
+
+quit   clr  @>83c4                     ; Reset user ISR address
+       blwp @>0000
